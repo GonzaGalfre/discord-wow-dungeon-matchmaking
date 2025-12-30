@@ -1,0 +1,6 @@
+# Discord.py 2.0+ - Modern Discord API with UI components (Views, Buttons, Selects)
+discord.py>=2.0.0
+
+# Python-dotenv - Load environment variables from .env file
+python-dotenv>=1.0.0
+

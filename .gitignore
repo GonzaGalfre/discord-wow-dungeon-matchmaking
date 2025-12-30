@@ -1,0 +1,32 @@
+# =============================================================================
+# WoW Mythic+ LFG Bot - Git Ignore
+# =============================================================================
+
+# Environment variables (NEVER commit secrets!)
+.env
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+env/
+.venv/
+.env/
+
+# IDE settings
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
