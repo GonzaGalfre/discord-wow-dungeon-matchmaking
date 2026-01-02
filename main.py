@@ -72,14 +72,22 @@ PARTY_COMPOSITION = {
 # ALMACENAMIENTO EN MEMORIA DE LA COLA
 # =============================================================================
 
-# La cola almacena todos los usuarios que actualmente buscan grupo
-# Estructura: {user_id: {"username": str, "role": str, "role_emoji": str, 
-#                        "key_min": int, "key_max": int, "timestamp": datetime}}
+# La cola almacena todos los usuarios/grupos que actualmente buscan grupo
+# 
+# Estructura para SOLO:
+# {user_id: {"username": str, "role": str, "composition": None,
+#            "key_min": int, "key_max": int, "timestamp": datetime}}
+#
+# Estructura para GRUPO (leader_id como clave):
+# {leader_id: {"username": str, "role": None, 
+#              "composition": {"tank": int, "healer": int, "dps": int},
+#              "key_min": int, "key_max": int, "timestamp": datetime}}
 #
 # ¿Por qué un diccionario con user_id como clave?
 # - Búsqueda rápida O(1) para verificar si un usuario ya está en cola
 # - Fácil de sobrescribir si el usuario se vuelve a apuntar
 # - Simple para eliminar un usuario específico cuando se va
+# - Para grupos, el líder es la clave y controla todo el grupo
 queue: Dict[int, dict] = {}
 
 
@@ -89,15 +97,17 @@ queue: Dict[int, dict] = {}
 
 def is_valid_composition(users: List[dict]) -> bool:
     """
-    Verifica si un grupo de usuarios forma una composición válida de M+.
+    Verifica si un grupo de usuarios/grupos forma una composición válida de M+.
     
     Una composición válida no excede los límites:
     - Máximo 1 Tanque
     - Máximo 1 Sanador
     - Máximo 3 DPS
     
+    Soporta tanto entradas solo (con "role") como grupos (con "composition").
+    
     Args:
-        users: Lista de usuarios con su información de rol
+        users: Lista de usuarios/grupos con su información de rol o composición
         
     Returns:
         True si la composición es válida, False si no
@@ -105,16 +115,13 @@ def is_valid_composition(users: List[dict]) -> bool:
     Ejemplos:
         >>> is_valid_composition([{"role": "tank"}, {"role": "healer"}])
         True
+        >>> is_valid_composition([{"composition": {"tank": 1, "healer": 1, "dps": 2}}])
+        True
         >>> is_valid_composition([{"role": "tank"}, {"role": "tank"}])
         False  # 2 tanks no es válido
     """
-    # Contar cuántos de cada rol hay
-    role_counts = {"tank": 0, "healer": 0, "dps": 0}
-    
-    for user in users:
-        role = user.get("role")
-        if role in role_counts:
-            role_counts[role] += 1
+    # Usar get_role_counts para obtener el conteo total
+    role_counts = get_role_counts(users)
     
     # Verificar que ningún rol exceda su límite
     for role, count in role_counts.items():
@@ -126,20 +133,61 @@ def is_valid_composition(users: List[dict]) -> bool:
 
 def get_role_counts(users: List[dict]) -> Dict[str, int]:
     """
-    Cuenta cuántos usuarios hay de cada rol.
+    Cuenta cuántos slots de cada rol hay en total.
+    
+    Soporta tanto entradas solo (con "role") como grupos (con "composition").
+    - Solo: tiene "role" (string) → cuenta como 1 de ese rol
+    - Grupo: tiene "composition" (dict) → suma los valores del dict
     
     Args:
-        users: Lista de usuarios
+        users: Lista de usuarios/grupos
         
     Returns:
-        Diccionario con el conteo de cada rol
+        Diccionario con el conteo total de cada rol
     """
     counts = {"tank": 0, "healer": 0, "dps": 0}
     for user in users:
-        role = user.get("role")
-        if role in counts:
-            counts[role] += 1
+        composition = user.get("composition")
+        if composition:
+            # Es un grupo: sumar la composición completa
+            for role, count in composition.items():
+                if role in counts:
+                    counts[role] += count
+        else:
+            # Es solo: sumar 1 al rol individual
+            role = user.get("role")
+            if role in counts:
+                counts[role] += 1
     return counts
+
+
+def is_group_entry(entry: dict) -> bool:
+    """
+    Verifica si una entrada de cola es un grupo.
+    
+    Args:
+        entry: Entrada de la cola
+        
+    Returns:
+        True si es un grupo (tiene composition), False si es solo
+    """
+    return entry.get("composition") is not None
+
+
+def get_entry_player_count(entry: dict) -> int:
+    """
+    Obtiene el número total de jugadores que representa una entrada.
+    
+    Args:
+        entry: Entrada de la cola
+        
+    Returns:
+        Número de jugadores (1 para solo, suma de composición para grupo)
+    """
+    composition = entry.get("composition")
+    if composition:
+        return sum(composition.values())
+    return 1
 
 
 def ranges_overlap(range1: Tuple[int, int], range2: Tuple[int, int]) -> bool:
@@ -189,19 +237,22 @@ def get_overlapping_range(range1: Tuple[int, int], range2: Tuple[int, int]) -> O
 
 def get_users_with_overlap(key_min: int, key_max: int, new_user_id: int) -> List[dict]:
     """
-    Encuentra usuarios en la cola con rango solapado Y composición de grupo válida.
+    Encuentra entradas en la cola con rango solapado Y composición de grupo válida.
     
     Esta función construye un grupo válido de forma incremental:
-    1. Empieza con el nuevo usuario
-    2. Añade otros usuarios si tienen rango solapado Y no rompen la composición
+    1. Empieza con el nuevo usuario/grupo
+    2. Añade otras entradas (solo o grupos) si tienen rango solapado Y no rompen la composición
+    
+    Soporta tanto entradas solo como grupos. La composición total se valida
+    sumando los slots de cada entrada (1 para solo, composición para grupos).
     
     Args:
         key_min: Nivel mínimo de llave buscado
         key_max: Nivel máximo de llave buscado
-        new_user_id: ID del usuario que acaba de unirse (para incluirlo primero)
+        new_user_id: ID del usuario/líder que acaba de unirse (para incluirlo primero)
         
     Returns:
-        Lista de usuarios que forman un grupo válido con rangos solapados
+        Lista de entradas que forman un grupo válido con rangos solapados
     """
     target_range = (key_min, key_max)
     
@@ -254,24 +305,35 @@ def calculate_common_range(users: List[dict]) -> Tuple[int, int]:
     return (common_min, common_max)
 
 
-def add_to_queue(user_id: int, username: str, role: str, key_min: int, key_max: int) -> None:
+def add_to_queue(
+    user_id: int, 
+    username: str, 
+    key_min: int, 
+    key_max: int,
+    role: Optional[str] = None,
+    composition: Optional[Dict[str, int]] = None
+) -> None:
     """
-    Añade o actualiza un usuario en la cola.
+    Añade o actualiza un usuario/grupo en la cola.
     
     Si el usuario ya está en la cola, su entrada se sobrescribe.
     Esto aplica la regla: un usuario = una entrada en cola.
     
+    Para SOLO: proporcionar role (y composition=None)
+    Para GRUPO: proporcionar composition (y role=None)
+    
     Args:
-        user_id: ID de usuario de Discord
+        user_id: ID de usuario de Discord (o líder del grupo)
         username: Nombre para mostrar en notificaciones
-        role: El rol que quiere jugar (tank/healer/dps)
         key_min: Nivel mínimo de llave
         key_max: Nivel máximo de llave
+        role: El rol que quiere jugar (tank/healer/dps) - solo para entradas individuales
+        composition: Composición del grupo {"tank": n, "healer": n, "dps": n} - solo para grupos
     """
     queue[user_id] = {
         "username": username,
         "role": role,
-        "role_emoji": ROLES[role]["emoji"],
+        "composition": composition,
         "key_min": key_min,
         "key_max": key_max,
         "timestamp": datetime.now(),
@@ -291,14 +353,44 @@ def remove_from_queue(user_id: int) -> bool:
     return queue.pop(user_id, None) is not None
 
 
+def _format_entry_composition(entry: dict) -> str:
+    """
+    Formatea la composición de una entrada (solo o grupo) para mostrar.
+    
+    Args:
+        entry: Entrada de la cola
+        
+    Returns:
+        String formateado con la composición
+    """
+    composition = entry.get("composition")
+    if composition:
+        # Es un grupo: mostrar composición completa
+        parts = []
+        if composition.get("tank", 0) > 0:
+            parts.append(f"🛡️{composition['tank']}")
+        if composition.get("healer", 0) > 0:
+            parts.append(f"💚{composition['healer']}")
+        if composition.get("dps", 0) > 0:
+            parts.append(f"⚔️{composition['dps']}")
+        return " ".join(parts)
+    else:
+        # Es solo: mostrar el rol individual
+        role = entry.get("role")
+        if role and role in ROLES:
+            return f"{ROLES[role]['emoji']} {ROLES[role]['name']}"
+        return "—"
+
+
 def build_match_embed(users: List[dict]) -> discord.Embed:
     """
     Crea un embed profesional para notificaciones de emparejamiento.
     
-    Este embed se envía públicamente cuando 2+ personas tienen rangos que se solapan.
+    Este embed se envía públicamente cuando 2+ entradas tienen rangos que se solapan.
+    Soporta tanto entradas solo como grupos.
     
     Args:
-        users: Lista de entradas de usuarios que coinciden
+        users: Lista de entradas (solo o grupos) que coinciden
         
     Returns:
         discord.Embed listo para enviar
@@ -306,25 +398,37 @@ def build_match_embed(users: List[dict]) -> discord.Embed:
     # Calcular el rango común donde todos coinciden
     common_range = calculate_common_range(users)
     
-    # Contar roles actuales
+    # Contar roles actuales (incluyendo grupos)
     role_counts = get_role_counts(users)
     
     # Crear el embed con un color dorado/naranja (temática WoW)
     embed = discord.Embed(
         title="🔔 ¡Grupo Encontrado!",
-        description="Los siguientes jugadores buscan grupo:",
+        description="Los siguientes jugadores/grupos buscan grupo:",
         color=discord.Color.gold(),
         timestamp=datetime.now(),
     )
     
-    # Construir la lista de jugadores con roles y emojis
+    # Construir la lista de jugadores/grupos
     player_lines = []
     for user in users:
-        # Formato: "🛡️ @Usuario (Tanque) - Llaves 9-15"
-        player_lines.append(
-            f"{user['role_emoji']} <@{user['user_id']}> ({ROLES[user['role']]['name']}) "
-            f"— Llaves {user['key_min']}-{user['key_max']}"
-        )
+        composition = user.get("composition")
+        if composition:
+            # Es un grupo: mostrar como líder + composición
+            total = sum(composition.values())
+            comp_text = _format_entry_composition(user)
+            player_lines.append(
+                f"👥 <@{user['user_id']}> (Grupo: {comp_text}, {total} jugadores) "
+                f"— Llaves {user['key_min']}-{user['key_max']}"
+            )
+        else:
+            # Es solo: formato original
+            role = user.get("role")
+            role_info = ROLES.get(role, {"name": "?", "emoji": "❓"})
+            player_lines.append(
+                f"{role_info['emoji']} <@{user['user_id']}> ({role_info['name']}) "
+                f"— Llaves {user['key_min']}-{user['key_max']}"
+            )
     
     # Añadir la lista de jugadores como un campo
     embed.add_field(
@@ -385,29 +489,44 @@ def build_confirmation_embed(matched_user_ids: List[int], confirmed_ids: set) ->
     """
     Crea un embed para mostrar el estado de confirmación del grupo.
     
+    Para grupos, solo el líder necesita confirmar.
+    Para solos, el jugador individual confirma.
+    
     Args:
-        matched_user_ids: Lista de IDs de usuarios en el match
-        confirmed_ids: Set de IDs de usuarios que ya confirmaron
+        matched_user_ids: Lista de IDs de usuarios/líderes en el match
+        confirmed_ids: Set de IDs de usuarios/líderes que ya confirmaron
         
     Returns:
         discord.Embed con el estado de confirmación
     """
     embed = discord.Embed(
         title="⏳ Confirmación de Grupo",
-        description="Todos los jugadores deben confirmar para formar el grupo.",
+        description="Todos los jugadores/líderes deben confirmar para formar el grupo.",
         color=discord.Color.orange(),
         timestamp=datetime.now(),
     )
     
-    # Mostrar estado de cada jugador
+    # Mostrar estado de cada entrada
     status_lines = []
     for uid in matched_user_ids:
-        if uid in confirmed_ids:
-            status_lines.append(f"✅ <@{uid}> — Confirmado")
-        elif uid in queue:
-            status_lines.append(f"⏳ <@{uid}> — Esperando confirmación...")
+        entry = queue.get(uid)
+        if entry and is_group_entry(entry):
+            # Es un grupo
+            comp_text = _format_entry_composition(entry)
+            if uid in confirmed_ids:
+                status_lines.append(f"✅ <@{uid}> (Grupo: {comp_text}) — Confirmado")
+            elif uid in queue:
+                status_lines.append(f"⏳ <@{uid}> (Grupo: {comp_text}) — Esperando confirmación...")
+            else:
+                status_lines.append(f"❌ <@{uid}> (Grupo) — Ya no está en cola")
         else:
-            status_lines.append(f"❌ <@{uid}> — Ya no está en cola")
+            # Es solo
+            if uid in confirmed_ids:
+                status_lines.append(f"✅ <@{uid}> — Confirmado")
+            elif uid in queue:
+                status_lines.append(f"⏳ <@{uid}> — Esperando confirmación...")
+            else:
+                status_lines.append(f"❌ <@{uid}> — Ya no está en cola")
     
     embed.add_field(
         name="Estado de Confirmación",
@@ -426,9 +545,10 @@ class ConfirmationView(discord.ui.View):
     """
     Vista para confirmar la formación del grupo.
     
-    Cada jugador debe hacer clic en 'Confirmar' o 'Rechazar'.
+    Cada jugador/líder debe hacer clic en 'Confirmar' o 'Rechazar'.
+    - Para grupos: solo el líder puede confirmar/rechazar por todo su grupo
     - Si todos confirman: grupo formado, todos eliminados de cola
-    - Si alguien rechaza: solo ese jugador es eliminado, los demás vuelven a buscar
+    - Si alguien rechaza: esa entrada (solo o grupo) es eliminada, los demás vuelven a buscar
     """
     
     def __init__(self, matched_user_ids: List[int], original_embed: discord.Embed):
@@ -448,10 +568,10 @@ class ConfirmationView(discord.ui.View):
         """Maneja el clic del botón Confirmar."""
         user_id = interaction.user.id
         
-        # Verificar que quien hace clic era parte del match
+        # Verificar que quien hace clic era parte del match (jugador solo o líder de grupo)
         if user_id not in self.matched_user_ids:
             await interaction.response.send_message(
-                "⚠️ Solo los jugadores del grupo pueden confirmar.",
+                "⚠️ Solo los jugadores o líderes de grupo pueden confirmar.",
                 ephemeral=True,
             )
             return
@@ -466,10 +586,17 @@ class ConfirmationView(discord.ui.View):
         
         # Verificar si ya confirmó
         if user_id in self.confirmed_ids:
-            await interaction.response.send_message(
-                "ℹ️ Ya has confirmado. Esperando a los demás...",
-                ephemeral=True,
-            )
+            entry = queue.get(user_id)
+            if entry and is_group_entry(entry):
+                await interaction.response.send_message(
+                    "ℹ️ Ya has confirmado por tu grupo. Esperando a los demás...",
+                    ephemeral=True,
+                )
+            else:
+                await interaction.response.send_message(
+                    "ℹ️ Ya has confirmado. Esperando a los demás...",
+                    ephemeral=True,
+                )
             return
         
         # Añadir a confirmados
@@ -481,14 +608,18 @@ class ConfirmationView(discord.ui.View):
         
         if all_confirmed and len(users_still_in_queue) >= 2:
             # ¡Todos confirmaron! Grupo formado
-            removed_users = []
+            removed_entries = []
             for uid in users_still_in_queue:
-                removed_users.append(f"<@{uid}>")
+                entry = queue.get(uid)
+                if entry and is_group_entry(entry):
+                    removed_entries.append(f"<@{uid}> (grupo)")
+                else:
+                    removed_entries.append(f"<@{uid}>")
                 remove_from_queue(uid)
             
             await interaction.response.send_message(
                 f"🎉 **¡Grupo formado!**\n\n"
-                f"El grupo se ha formado por {', '.join(removed_users)} "
+                f"El grupo se ha formado por {', '.join(removed_entries)} "
                 f"y serán eliminados de la cola.\n\n"
                 f"¡Buena suerte en la mazmorra! 🗝️",
                 ephemeral=False,
@@ -515,22 +646,32 @@ class ConfirmationView(discord.ui.View):
         """Maneja el clic del botón Rechazar."""
         user_id = interaction.user.id
         
-        # Verificar que quien hace clic era parte del match
+        # Verificar que quien hace clic era parte del match (jugador solo o líder de grupo)
         if user_id not in self.matched_user_ids:
             await interaction.response.send_message(
-                "⚠️ Solo los jugadores del grupo pueden rechazar.",
+                "⚠️ Solo los jugadores o líderes de grupo pueden rechazar.",
                 ephemeral=True,
             )
             return
         
-        # Eliminar al usuario de la cola
+        # Verificar si era un grupo
+        entry = queue.get(user_id)
+        was_group = entry and is_group_entry(entry)
+        
+        # Eliminar al usuario/grupo de la cola
         was_in_queue = remove_from_queue(user_id)
         
         if was_in_queue:
-            await interaction.response.send_message(
-                "✅ Has rechazado y salido de la cola. ¡Hasta la próxima!",
-                ephemeral=True,
-            )
+            if was_group:
+                await interaction.response.send_message(
+                    "✅ Has rechazado y tu grupo ha salido de la cola. ¡Hasta la próxima!",
+                    ephemeral=True,
+                )
+            else:
+                await interaction.response.send_message(
+                    "✅ Has rechazado y salido de la cola. ¡Hasta la próxima!",
+                    ephemeral=True,
+                )
         else:
             await interaction.response.send_message(
                 "ℹ️ Ya no estabas en la cola.",
@@ -594,7 +735,9 @@ class PartyCompleteView(discord.ui.View):
     
     Se adjunta a los mensajes de notificación de emparejamiento.
     - 'Grupo Completo': Inicia el proceso de confirmación
-    - 'Salir de Cola': Elimina solo al usuario que hace clic
+    - 'Salir de Cola': Elimina al usuario/líder que hace clic (y su grupo si aplica)
+    
+    Para grupos: solo el líder puede interactuar con los botones.
     
     Nota: Esta vista no es completamente persistente después de un reinicio
     del bot porque necesita saber qué usuarios estaban en el match.
@@ -616,14 +759,14 @@ class PartyCompleteView(discord.ui.View):
         """
         Maneja el clic del botón Grupo Completo.
         
-        Inicia el proceso de confirmación donde todos deben aceptar.
+        Inicia el proceso de confirmación donde todos (jugadores/líderes) deben aceptar.
         """
         user_id = interaction.user.id
         
-        # Verificar que quien hace clic era parte del match
+        # Verificar que quien hace clic era parte del match (jugador solo o líder de grupo)
         if user_id not in self.matched_user_ids:
             await interaction.response.send_message(
-                "⚠️ Solo los jugadores del grupo pueden usar estos botones.",
+                "⚠️ Solo los jugadores o líderes de grupo pueden usar estos botones.",
                 ephemeral=True,
             )
             return
@@ -690,27 +833,37 @@ class PartyCompleteView(discord.ui.View):
         """
         Maneja el clic del botón Salir de Cola.
         
-        Elimina SOLO al usuario que hace clic de la cola.
+        Elimina al usuario/líder que hace clic de la cola (incluyendo su grupo).
         Útil cuando alguien ya no puede jugar pero los demás sí.
         Si no queda nadie del match en cola, elimina el mensaje.
         """
         user_id = interaction.user.id
         
-        # Verificar que quien hace clic era parte del match
+        # Verificar que quien hace clic era parte del match (jugador solo o líder de grupo)
         if user_id not in self.matched_user_ids:
             await interaction.response.send_message(
-                "⚠️ Solo los jugadores del grupo pueden usar estos botones.",
+                "⚠️ Solo los jugadores o líderes de grupo pueden usar estos botones.",
                 ephemeral=True,
             )
             return
         
+        # Verificar si era un grupo
+        entry = queue.get(user_id)
+        was_group = entry and is_group_entry(entry)
+        
         was_in_queue = remove_from_queue(user_id)
         
         if was_in_queue:
-            await interaction.response.send_message(
-                "✅ Has salido de la cola. ¡Hasta la próxima!",
-                ephemeral=True,
-            )
+            if was_group:
+                await interaction.response.send_message(
+                    "✅ Tu grupo ha salido de la cola. ¡Hasta la próxima!",
+                    ephemeral=True,
+                )
+            else:
+                await interaction.response.send_message(
+                    "✅ Has salido de la cola. ¡Hasta la próxima!",
+                    ephemeral=True,
+                )
         else:
             await interaction.response.send_message(
                 "ℹ️ Ya no estabas en la cola.",
@@ -777,7 +930,7 @@ class KeyRangeMaxSelectView(discord.ui.View):
         username = interaction.user.display_name
         
         # Añadir el usuario a la cola (o actualizar si ya está)
-        add_to_queue(user_id, username, self.role, self.key_min, key_max)
+        add_to_queue(user_id, username, self.key_min, key_max, role=self.role)
         
         # Buscar quién más tiene rangos que se solapan Y roles compatibles
         matches = get_users_with_overlap(self.key_min, key_max, user_id)
@@ -884,6 +1037,291 @@ class KeyRangeMinSelectView(discord.ui.View):
         )
 
 
+# =============================================================================
+# VISTAS PARA COLA DE GRUPO
+# =============================================================================
+
+class GroupKeyRangeMaxSelectView(discord.ui.View):
+    """
+    Vista para seleccionar el nivel MÁXIMO de llave para un GRUPO.
+    
+    Similar a KeyRangeMaxSelectView pero usa composición en lugar de rol.
+    """
+    
+    def __init__(self, composition: Dict[str, int], key_min: int):
+        super().__init__(timeout=60)
+        self.composition = composition
+        self.key_min = key_min
+        
+        options = [
+            discord.SelectOption(
+                label=f"Nivel {i}",
+                value=str(i),
+                description=f"Llaves hasta +{i}",
+                emoji="🔼" if i == MAX_KEY_LEVEL else "🗝️",
+            )
+            for i in range(key_min, MAX_KEY_LEVEL + 1)
+        ]
+        
+        self.key_select = discord.ui.Select(
+            placeholder=f"Selecciona nivel máximo ({key_min}-{MAX_KEY_LEVEL})...",
+            options=options,
+            custom_id="group_key_max_select",
+        )
+        self.key_select.callback = self.key_max_selected
+        self.add_item(self.key_select)
+    
+    def _format_composition(self) -> str:
+        """Formatea la composición para mostrar."""
+        parts = []
+        if self.composition["tank"] > 0:
+            parts.append(f"🛡️ {self.composition['tank']} Tanque(s)")
+        if self.composition["healer"] > 0:
+            parts.append(f"💚 {self.composition['healer']} Sanador(es)")
+        if self.composition["dps"] > 0:
+            parts.append(f"⚔️ {self.composition['dps']} DPS")
+        return " • ".join(parts)
+    
+    async def key_max_selected(self, interaction: discord.Interaction):
+        """Maneja la selección del nivel máximo de llave para grupos."""
+        key_max = int(self.key_select.values[0])
+        user_id = interaction.user.id
+        username = interaction.user.display_name
+        
+        # Añadir el grupo a la cola
+        add_to_queue(user_id, username, self.key_min, key_max, composition=self.composition)
+        
+        # Buscar coincidencias
+        matches = get_users_with_overlap(self.key_min, key_max, user_id)
+        
+        total_players = sum(self.composition.values())
+        composition_text = self._format_composition()
+        
+        if len(matches) == 1:
+            # Solo este grupo - esperando
+            await interaction.response.edit_message(
+                content=f"✅ **¡Tu grupo está en la cola!**\n\n"
+                f"👥 **Composición:** {composition_text}\n"
+                f"👤 **Jugadores:** {total_players}\n"
+                f"🗝️ **Rango de Llaves:** {self.key_min}-{key_max}\n\n"
+                f"¡Serás notificado cuando otros busquen llaves compatibles!\n\n"
+                f"*Este mensaje se cerrará en 5 segundos...*",
+                view=None,
+            )
+            
+            await asyncio.sleep(5)
+            try:
+                await interaction.delete_original_response()
+            except discord.errors.NotFound:
+                pass
+        else:
+            # ¡Match encontrado!
+            await interaction.response.edit_message(
+                content=f"🎉 **¡Buenas noticias!** Se encontraron jugadores compatibles.\n"
+                f"Se ha enviado una notificación al canal de emparejamientos.\n\n"
+                f"*Este mensaje se cerrará en 5 segundos...*",
+                view=None,
+            )
+            
+            match_channel = interaction.client.get_channel(MATCH_CHANNEL_ID)
+            if not match_channel:
+                match_channel = interaction.channel
+            
+            if match_channel:
+                embed = build_match_embed(matches)
+                mentions = " ".join(f"<@{u['user_id']}>" for u in matches)
+                matched_user_ids = [u["user_id"] for u in matches]
+                
+                await match_channel.send(
+                    content=mentions,
+                    embed=embed,
+                    view=PartyCompleteView(matched_user_ids),
+                )
+            
+            await asyncio.sleep(5)
+            try:
+                await interaction.delete_original_response()
+            except discord.errors.NotFound:
+                pass
+
+
+class GroupKeyRangeMinSelectView(discord.ui.View):
+    """
+    Vista para seleccionar el nivel MÍNIMO de llave para un GRUPO.
+    
+    Esta aparece DESPUÉS de que el líder selecciona la composición del grupo.
+    """
+    
+    def __init__(self, composition: Dict[str, int]):
+        super().__init__(timeout=60)
+        self.composition = composition
+        
+        options = [
+            discord.SelectOption(
+                label=f"Nivel {i}",
+                value=str(i),
+                description=f"Llaves desde +{i}",
+                emoji="🔽" if i == MIN_KEY_LEVEL else "🗝️",
+            )
+            for i in range(MIN_KEY_LEVEL, MAX_KEY_LEVEL + 1)
+        ]
+        
+        self.key_select = discord.ui.Select(
+            placeholder=f"Selecciona nivel mínimo ({MIN_KEY_LEVEL}-{MAX_KEY_LEVEL})...",
+            options=options,
+            custom_id="group_key_min_select",
+        )
+        self.key_select.callback = self.key_min_selected
+        self.add_item(self.key_select)
+    
+    def _format_composition(self) -> str:
+        """Formatea la composición para mostrar."""
+        parts = []
+        if self.composition["tank"] > 0:
+            parts.append(f"🛡️ {self.composition['tank']}")
+        if self.composition["healer"] > 0:
+            parts.append(f"💚 {self.composition['healer']}")
+        if self.composition["dps"] > 0:
+            parts.append(f"⚔️ {self.composition['dps']}")
+        return " • ".join(parts)
+    
+    async def key_min_selected(self, interaction: discord.Interaction):
+        """Maneja la selección del nivel mínimo para grupos."""
+        key_min = int(self.key_select.values[0])
+        
+        await interaction.response.edit_message(
+            content=f"👥 **Composición:** {self._format_composition()}\n"
+                    f"🔽 **Mínimo:** Nivel {key_min}\n\n"
+                    f"Ahora, selecciona tu **nivel máximo** de llave:",
+            view=GroupKeyRangeMaxSelectView(self.composition, key_min),
+        )
+
+
+class GroupCompositionView(discord.ui.View):
+    """
+    Vista para que el líder seleccione la composición de su grupo.
+    
+    Permite seleccionar:
+    - Tanques: 0-1
+    - Sanadores: 0-1  
+    - DPS: 0-3
+    
+    El total debe ser al menos 1 y máximo 5.
+    """
+    
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.tank_count = 0
+        self.healer_count = 0
+        self.dps_count = 0
+        
+        # Select para Tanques (0-1)
+        self.tank_select = discord.ui.Select(
+            placeholder="🛡️ Tanques (0-1)...",
+            options=[
+                discord.SelectOption(label="0 Tanques", value="0", emoji="🛡️", default=True),
+                discord.SelectOption(label="1 Tanque", value="1", emoji="🛡️"),
+            ],
+            custom_id="group_tank_select",
+            row=0,
+        )
+        self.tank_select.callback = self.tank_selected
+        self.add_item(self.tank_select)
+        
+        # Select para Sanadores (0-1)
+        self.healer_select = discord.ui.Select(
+            placeholder="💚 Sanadores (0-1)...",
+            options=[
+                discord.SelectOption(label="0 Sanadores", value="0", emoji="💚", default=True),
+                discord.SelectOption(label="1 Sanador", value="1", emoji="💚"),
+            ],
+            custom_id="group_healer_select",
+            row=1,
+        )
+        self.healer_select.callback = self.healer_selected
+        self.add_item(self.healer_select)
+        
+        # Select para DPS (0-3)
+        self.dps_select = discord.ui.Select(
+            placeholder="⚔️ DPS (0-3)...",
+            options=[
+                discord.SelectOption(label="0 DPS", value="0", emoji="⚔️", default=True),
+                discord.SelectOption(label="1 DPS", value="1", emoji="⚔️"),
+                discord.SelectOption(label="2 DPS", value="2", emoji="⚔️"),
+                discord.SelectOption(label="3 DPS", value="3", emoji="⚔️"),
+            ],
+            custom_id="group_dps_select",
+            row=2,
+        )
+        self.dps_select.callback = self.dps_selected
+        self.add_item(self.dps_select)
+    
+    async def tank_selected(self, interaction: discord.Interaction):
+        """Actualiza el conteo de tanques."""
+        self.tank_count = int(self.tank_select.values[0])
+        await interaction.response.defer()
+    
+    async def healer_selected(self, interaction: discord.Interaction):
+        """Actualiza el conteo de sanadores."""
+        self.healer_count = int(self.healer_select.values[0])
+        await interaction.response.defer()
+    
+    async def dps_selected(self, interaction: discord.Interaction):
+        """Actualiza el conteo de DPS."""
+        self.dps_count = int(self.dps_select.values[0])
+        await interaction.response.defer()
+    
+    @discord.ui.button(
+        label="Confirmar Composición",
+        style=discord.ButtonStyle.success,
+        emoji="✅",
+        row=3,
+    )
+    async def confirm_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        """Confirma la composición y procede a seleccionar el rango de llaves."""
+        total = self.tank_count + self.healer_count + self.dps_count
+        
+        if total == 0:
+            await interaction.response.send_message(
+                "⚠️ Debes seleccionar al menos 1 jugador en tu grupo.",
+                ephemeral=True,
+            )
+            return
+        
+        if total > 5:
+            await interaction.response.send_message(
+                "⚠️ Un grupo de M+ puede tener máximo 5 jugadores.",
+                ephemeral=True,
+            )
+            return
+        
+        composition = {
+            "tank": self.tank_count,
+            "healer": self.healer_count,
+            "dps": self.dps_count,
+        }
+        
+        # Formatear para mostrar
+        parts = []
+        if self.tank_count > 0:
+            parts.append(f"🛡️ {self.tank_count} Tanque(s)")
+        if self.healer_count > 0:
+            parts.append(f"💚 {self.healer_count} Sanador(es)")
+        if self.dps_count > 0:
+            parts.append(f"⚔️ {self.dps_count} DPS")
+        
+        composition_text = " • ".join(parts)
+        
+        await interaction.response.edit_message(
+            content=f"👥 **Composición del Grupo:** {composition_text}\n"
+                    f"👤 **Total:** {total} jugadores\n\n"
+                    f"Ahora, selecciona el **nivel mínimo** de llave:",
+            view=GroupKeyRangeMinSelectView(composition),
+        )
+
+
 class RoleSelectView(discord.ui.View):
     """
     Vista para seleccionar el rol del usuario (Tanque/Sanador/DPS).
@@ -945,6 +1383,48 @@ class RoleSelectView(discord.ui.View):
         await self.handle_role_selection(interaction, "dps")
 
 
+class QueueTypeSelectView(discord.ui.View):
+    """
+    Vista para seleccionar el tipo de cola: Solo o Grupo.
+    
+    Este es el primer paso después de hacer clic en "Unirse a Cola".
+    """
+    
+    def __init__(self):
+        super().__init__(timeout=60)
+    
+    @discord.ui.button(
+        label="Solo",
+        style=discord.ButtonStyle.primary,
+        emoji="👤",
+    )
+    async def solo_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        """Inicia el flujo de cola individual."""
+        await interaction.response.edit_message(
+            content="**👤 Cola Individual**\n\n"
+                    "Selecciona tu rol:",
+            view=RoleSelectView(),
+        )
+    
+    @discord.ui.button(
+        label="Grupo",
+        style=discord.ButtonStyle.success,
+        emoji="👥",
+    )
+    async def group_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        """Inicia el flujo de cola de grupo."""
+        await interaction.response.edit_message(
+            content="**👥 Cola de Grupo**\n\n"
+                    "Como líder, selecciona la composición de tu grupo.\n"
+                    "Elige cuántos jugadores de cada rol hay en tu grupo:",
+            view=GroupCompositionView(),
+        )
+
+
 class JoinQueueView(discord.ui.View):
     """
     La vista principal persistente con el botón "Unirse a Cola".
@@ -968,13 +1448,13 @@ class JoinQueueView(discord.ui.View):
         """
         Maneja el clic del botón Unirse a Cola.
         
-        Inicia el flujo de selección de rol.
+        Inicia el flujo preguntando si es solo o grupo.
         La respuesta es efímera (solo el usuario que hace clic la ve).
         """
         await interaction.response.send_message(
             "**🎮 ¿Buscando grupo para Mythic+?**\n\n"
-            "Primero, selecciona tu rol:",
-            view=RoleSelectView(),
+            "¿Cómo quieres unirte a la cola?",
+            view=QueueTypeSelectView(),
             ephemeral=True,
         )
 
@@ -1078,6 +1558,7 @@ async def queue_command(interaction: discord.Interaction):
     Comando slash para ver la cola actual.
     
     Útil para ver quién busca grupo sin unirse.
+    Muestra tanto jugadores individuales como grupos.
     
     Uso: /cola
     """
@@ -1094,20 +1575,36 @@ async def queue_command(interaction: discord.Interaction):
         timestamp=datetime.now(),
     )
     
-    # Listar todos los usuarios con sus rangos
+    # Listar todos los usuarios/grupos con sus rangos
     user_lines = []
+    total_players = 0
+    
     for user_id, data in queue.items():
-        user_lines.append(
-            f"{data['role_emoji']} <@{user_id}> — Llaves {data['key_min']}-{data['key_max']}"
-        )
+        composition = data.get("composition")
+        if composition:
+            # Es un grupo
+            total = sum(composition.values())
+            total_players += total
+            comp_text = _format_entry_composition(data)
+            user_lines.append(
+                f"👥 <@{user_id}> (Grupo: {comp_text}, {total} jugadores) — Llaves {data['key_min']}-{data['key_max']}"
+            )
+        else:
+            # Es solo
+            total_players += 1
+            role = data.get("role")
+            role_info = ROLES.get(role, {"name": "?", "emoji": "❓"})
+            user_lines.append(
+                f"{role_info['emoji']} <@{user_id}> — Llaves {data['key_min']}-{data['key_max']}"
+            )
     
     embed.add_field(
-        name="🎮 Jugadores Buscando",
+        name="🎮 Jugadores/Grupos Buscando",
         value="\n".join(user_lines) if user_lines else "Nadie en cola",
         inline=False,
     )
     
-    embed.set_footer(text=f"Total en cola: {len(queue)}")
+    embed.set_footer(text=f"Entradas en cola: {len(queue)} | Jugadores totales: {total_players}")
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -1118,14 +1615,27 @@ async def leave_command(interaction: discord.Interaction):
     Comando slash para salir de la cola.
     
     Alternativa a hacer clic en el botón Salir de Cola.
+    Si eres líder de un grupo, todo tu grupo saldrá de la cola.
     
     Uso: /salir
     """
-    if remove_from_queue(interaction.user.id):
-        await interaction.response.send_message(
-            "✅ ¡Has sido eliminado de la cola!",
-            ephemeral=True,
-        )
+    user_id = interaction.user.id
+    
+    # Verificar si era un grupo antes de eliminar
+    entry = queue.get(user_id)
+    was_group = entry and is_group_entry(entry)
+    
+    if remove_from_queue(user_id):
+        if was_group:
+            await interaction.response.send_message(
+                "✅ ¡Tu grupo ha sido eliminado de la cola!",
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                "✅ ¡Has sido eliminado de la cola!",
+                ephemeral=True,
+            )
     else:
         await interaction.response.send_message(
             "ℹ️ No estabas en la cola.",
