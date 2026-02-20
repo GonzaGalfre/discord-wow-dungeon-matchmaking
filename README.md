@@ -4,25 +4,36 @@ A Discord bot that acts as a "Soft Matchmaker" for World of Warcraft Mythic+ dun
 
 ## Features
 
+- **Multi-Guild Support** - Works across multiple Discord servers simultaneously
 - **Persistent Queue Button** - Survives bot restarts
 - **Role Selection** - Tank, Healer, or DPS with themed buttons
-- **Key Range Filtering** - 2-5, 6-10, 11-15, or 16-20
-- **Automatic Matching** - Notifies all players looking for the same key range
-- **Easy Exit** - Leave the queue with a button click or `/leave` command
-- **Queue Viewer** - Check who's looking with `/queue`
+- **Group Queue** - Queue as a pre-made group with any composition
+- **Flexible Key Range** - Select min and max key levels (2-20)
+- **Automatic Matching** - Notifies all players looking for compatible key ranges
+- **Multiple Independent Groups** - Players can only be in one match at a time, allowing multiple groups to form simultaneously
+- **Smart Match Prevention** - Players cannot join the queue while already in an active match
+- **Stats & Leaderboards** - Track completed keys and see weekly/all-time rankings
+- **Weekly Announcements** - Automatic weekly summaries on Tuesday reset
+- **Easy Exit** - Leave the queue with a button click or `/salir` command
+- **Queue Viewer** - Check who's looking with `/cola`
+- **Admin Web Dashboard** - Monitor queue status, active groups, and leaderboard from a browser (polling every 10s)
 
 ## How It Works
 
 ```
 User clicks "Join Queue" button
         ↓
-Select Role (Tank/Healer/DPS)
+Choose: Solo or Group queue
         ↓
-Select Key Range (2-5, 6-10, etc.)
+Select Role (Solo) or Composition (Group)
+        ↓
+Select Min & Max Key Levels
         ↓
 Added to queue → Check for matches
         ↓
-Match found? → Notify all players in that range!
+Match found? → Notify all players!
+        ↓
+Everyone confirms → Group formed + Stats recorded
 ```
 
 ## Setup
@@ -45,7 +56,8 @@ In the Developer Portal:
    - Embed Links
    - Use Slash Commands
    - Read Message History
-4. Copy the generated URL and use it to invite the bot to your server
+   - Manage Messages (for deleting match notifications)
+4. Copy the generated URL and use it to invite the bot to your server(s)
 
 ### 3. Set Up the Project
 
@@ -73,15 +85,20 @@ pip install -r requirements.txt
    cp .env.example .env
    ```
 
-2. Edit `.env` with your values:
+2. Edit `.env` with your bot token:
    ```env
    DISCORD_TOKEN=your_bot_token_here
-   LFG_CHANNEL_ID=123456789012345678
    ```
 
-   To get a Channel ID:
-   - Enable Developer Mode in Discord (Settings → Advanced → Developer Mode)
-   - Right-click the channel and select "Copy ID"
+   **Note:** Channel IDs are no longer needed in `.env` - they are now configured per-server using the `/setup` and `/config` commands.
+
+3. Optional: Enable admin dashboard:
+   ```env
+   DASHBOARD_PASSWORD=your_admin_password
+   DASHBOARD_HOST=127.0.0.1
+   DASHBOARD_PORT=8080
+   ```
+   If `DASHBOARD_PASSWORD` is set, open `http://127.0.0.1:8080` and authenticate with Basic Auth.
 
 ### 5. Run the Bot
 
@@ -92,79 +109,199 @@ python main.py
 You should see:
 ```
 🚀 Starting WoW Mythic+ LFG Bot...
-✅ Slash commands synced!
-🤖 Logged in as YourBot#1234 (ID: 123456789)
-📡 Connected to 1 guild(s)
+✅ ¡Comandos slash sincronizados!
+🤖 Conectado como YourBot#1234 (ID: 123456789)
+📡 Conectado a 2 servidor(es):
+   • My Guild (ID: 123456789)
+   • Test Server (ID: 987654321)
+────────────────────────────────────────
+⚙️ 1 servidor(es) configurado(s):
+   • My Guild [match: ✓] [anuncios: ✗]
 ────────────────────────────────────────
 ```
 
-### 6. Set Up the LFG Channel
+### 6. Set Up Each Server
 
-In Discord, go to your LFG channel and use the `/setup` command. This posts the persistent "Join Queue" button.
+In each Discord server where you want to use the bot:
+
+1. **Initial Setup**: Use `/setup` in your LFG channel. This:
+   - Posts the persistent "Join Queue" button
+   - Saves the channel as both LFG and match notification channel
+
+2. **Optional Configuration**: Use `/config` to set different channels:
+   - `/config tipo:match canal:#match-notifications` - Separate channel for matches
+   - `/config tipo:announcement canal:#announcements` - Weekly announcement channel
+
+3. **View Current Config**: Use `/verconfig` to see the server's configuration
 
 ## Commands
 
+### User Commands
 | Command | Description |
 |---------|-------------|
-| `/setup` | Post the LFG button (Admin only) |
-| `/queue` | View who's currently in the queue |
-| `/leave` | Leave the queue |
+| `/cola` | View who's currently in the queue |
+| `/salir` | Leave the queue |
+| `/leaderboard` | View weekly or all-time leaderboard |
+| `/mystats` | View your personal stats |
+| `/playerstats` | View another player's stats |
+
+### Admin Commands
+| Command | Description |
+|---------|-------------|
+| `/setup` | Post the LFG button and configure the server |
+| `/config` | Configure match or announcement channels |
+| `/verconfig` | View current server configuration |
+| `/anuncio` | Manually post weekly summary |
+
+### Development Commands (Admin Only)
+| Command | Description |
+|---------|-------------|
+| `/dev_add_player` | Add a fake solo player for testing |
+| `/dev_add_group` | Add a fake group for testing |
+| `/dev_simulate_scenario` | Create predefined test scenarios |
+| `/dev_queue_state` | View internal queue state |
+| `/dev_force_match` | Force matchmaking |
+| `/dev_remove_player` | Remove player by ID |
+| `/dev_clear_queue` | Clear entire queue |
+| `/dev_info` | Show dev commands help |
+
+See [DEV_MODE_GUIDE.md](DEV_MODE_GUIDE.md) for detailed testing workflows.
+
+## Multi-Guild Support
+
+The bot is designed to work with multiple Discord servers simultaneously:
+
+- **Independent Queues**: Each server has its own separate queue
+- **Per-Server Configuration**: Channel settings are stored per-server in SQLite
+- **Guild-Specific Stats**: Leaderboards show stats for the current server
+- **Automatic Announcements**: Weekly summaries are sent to all configured servers
+
+### Adding the Bot to Multiple Servers
+
+1. Use the OAuth2 URL to invite the bot to each server
+2. Run `/setup` in each server to configure it
+3. Optionally use `/config` to customize channels
 
 ## Project Structure
 
 ```
 discord-wow-dungeon-matchmaking/
-├── main.py              # Main bot file with all logic
+├── .cursorrules         # AI assistant guidelines for architecture
+├── main.py              # Entry point (minimal)
+├── bot.py               # LFGBot class definition
+├── bot_data.db          # SQLite database (auto-created)
 ├── requirements.txt     # Python dependencies
 ├── .env.example         # Environment variable template
 ├── .env                 # Your configuration (git-ignored)
 ├── .gitignore           # Git ignore rules
-└── README.md            # This file
+├── README.md            # This file
+│
+├── config/              # Configuration module
+│   ├── __init__.py
+│   └── settings.py      # Constants and environment variables
+│
+├── models/              # Data layer
+│   ├── __init__.py
+│   ├── database.py      # SQLite connection and schema
+│   ├── queue.py         # QueueManager class (multi-guild)
+│   ├── stats.py         # Stats database operations
+│   └── guild_settings.py # Per-guild configuration storage
+│
+├── services/            # Business logic
+│   ├── __init__.py
+│   ├── matchmaking.py   # Matching algorithms
+│   ├── embeds.py        # Discord embed builders
+│   └── leaderboard.py   # Leaderboard embed builders
+│
+├── views/               # Discord UI components
+│   ├── __init__.py
+│   ├── join_queue.py    # Entry point views
+│   ├── role_selection.py    # Solo queue views
+│   ├── group_selection.py   # Group queue views
+│   └── party.py         # Party formation views
+│
+└── cogs/                # Discord slash commands
+    ├── __init__.py
+    ├── lfg.py           # LFG commands (/setup, /config, /cola, /salir)
+    └── stats.py         # Stats commands (/leaderboard, /mystats, etc.)
 ```
 
-## Code Overview
+## Architecture Overview
 
-### Views (UI Components)
+The bot follows a modular architecture with clear separation of concerns:
 
-- **JoinQueueView** - Persistent button to start the flow
-- **RoleSelectView** - Ephemeral buttons for Tank/Healer/DPS
-- **KeyRangeSelectView** - Dropdown for key range selection
-- **LeaveQueueView** - Persistent button on match notifications
+| Module | Responsibility |
+|--------|----------------|
+| `config/` | Configuration and constants |
+| `models/` | Data structures (QueueManager, GuildSettings, Stats) |
+| `services/` | Business logic (matchmaking, embeds, leaderboards) |
+| `views/` | Discord UI components |
+| `cogs/` | Slash commands |
 
-### Key Functions
+### Key Components
 
-- `add_to_queue()` - Add or update a user in the queue
-- `remove_from_queue()` - Remove a user from the queue
-- `get_users_in_range()` - Find all users looking for a specific key range
-- `build_match_embed()` - Create the match notification embed
+- **QueueManager** (`models/queue.py`) - Manages guild-specific in-memory queues
+- **GuildSettings** (`models/guild_settings.py`) - Per-guild channel configuration
+- **Stats** (`models/stats.py`) - Database operations for tracking completions
+- **Matchmaking Service** (`services/matchmaking.py`) - Finding compatible groups
+- **Embed Builders** (`services/embeds.py`, `services/leaderboard.py`) - Creating Discord embeds
+- **Views** (`views/`) - Discord buttons, selects, and modals
+- **LFG Cog** (`cogs/lfg.py`) - LFG-related slash commands
+- **Stats Cog** (`cogs/stats.py`) - Stats/leaderboard commands + weekly task
 
-### Persistence
+### Database
 
-The bot uses `custom_id` on buttons and registers views in `setup_hook()` so buttons continue working after restarts. The queue itself is in-memory, so it resets on restart (database support planned for Phase 2).
+The bot uses SQLite (`bot_data.db`) to store:
+- Guild configurations (channel IDs per server)
+- Completed key records (with guild_id for multi-guild tracking)
+- Participant data for statistics
+
+The queue itself remains in-memory for fast access but is now guild-aware.
+
+## Adding New Features
+
+Follow the `.cursorrules` file for architecture guidelines:
+
+1. **New commands** → Add to `cogs/` as a Cog
+2. **New UI components** → Add to `views/`
+3. **New business logic** → Add to `services/`
+4. **New constants** → Add to `config/settings.py`
+5. **Queue operations** → Use `QueueManager` from `models/`
+
+**Never add new code directly to `main.py`** - it should only contain the entry point.
 
 ## Customization
 
-### Key Ranges
+### Key Level Range
 
-Edit the `KEY_RANGES` list in `main.py`:
+Edit in `config/settings.py`:
 
 ```python
-KEY_RANGES = [
-    ("2-5", "Keys 2-5", "Beginner keys"),
-    ("6-10", "Keys 6-10", "Intermediate"),
-    # Add more ranges as needed
-]
+MIN_KEY_LEVEL = 2
+MAX_KEY_LEVEL = 20
 ```
 
 ### Roles
 
-Edit the `ROLES` dictionary:
+Edit the `ROLES` dictionary in `config/settings.py`:
 
 ```python
 ROLES = {
-    "tank": {"name": "Tank", "emoji": "🛡️"},
-    "healer": {"name": "Healer", "emoji": "💚"},
+    "tank": {"name": "Tanque", "emoji": "🛡️"},
+    "healer": {"name": "Sanador", "emoji": "💚"},
     "dps": {"name": "DPS", "emoji": "⚔️"},
+}
+```
+
+### Party Composition
+
+Edit in `config/settings.py`:
+
+```python
+PARTY_COMPOSITION = {
+    "tank": 1,
+    "healer": 1,
+    "dps": 3,
 }
 ```
 
@@ -176,7 +313,6 @@ Make sure the views are registered in `setup_hook()`:
 ```python
 async def setup_hook(self):
     self.add_view(JoinQueueView())
-    self.add_view(LeaveQueueView())
 ```
 
 ### Slash commands not showing
@@ -187,13 +323,35 @@ Run the bot and wait a few minutes for Discord to sync. If still not working, tr
 
 Make sure your `.env` file exists and contains `DISCORD_TOKEN=your_actual_token`.
 
-## Future Improvements (Phase 2)
+### Stats not showing for a server
 
-- [ ] SQLite database for persistent queue storage
+Make sure you've run `/setup` in that server. Stats are tracked per-guild starting from when the server was configured.
+
+### Testing multi-user scenarios
+
+Use the dev commands to simulate multiple users without needing multiple Discord accounts:
+
+```
+/dev_simulate_scenario escenario:Múltiples Grupos Independientes
+/dev_force_match
+```
+
+See [DEV_MODE_GUIDE.md](DEV_MODE_GUIDE.md) for complete testing workflows.
+
+## Recent Improvements
+
+- [x] **Fixed multiple group membership** - Players can no longer be in multiple matches simultaneously
+- [x] **Multiple independent groups** - Different groups can form and exist at the same time
+- [x] **Match state management** - Proper cleanup when matches are dissolved
+
+## Future Improvements
+
+- [ ] Batch matchmaking (form all possible groups at once)
+- [ ] Queue persistence (save queue to database)
 - [ ] Auto-expire queue entries after X hours
-- [ ] Statistics and analytics
-- [ ] Multiple guild support
 - [ ] Custom key range configuration per server
+- [ ] Role-specific stats tracking
+- [ ] Admin commands for queue management
 
 ## License
 

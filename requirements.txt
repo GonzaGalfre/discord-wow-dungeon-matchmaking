@@ -4,3 +4,7 @@ discord.py>=2.0.0
 # Python-dotenv - Load environment variables from .env file
 python-dotenv>=1.0.0
 
+# Web dashboard
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+

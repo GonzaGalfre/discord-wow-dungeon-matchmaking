@@ -1,0 +1,213 @@
+# WoW Mythic+ LFG Discord Bot - Project Rules
+
+## Project Overview
+This is a Discord bot for World of Warcraft Mythic+ dungeon matchmaking. It allows guild members to queue for dungeons based on their role and preferred key levels.
+
+## Architecture
+
+This project follows a modular architecture with clear separation of concerns:
+
+```
+discord-wow-dungeon-matchmaking/
+├── main.py          # Entry point ONLY - do not add logic here
+├── bot.py           # LFGBot class definition
+├── config/          # Configuration and constants
+├── models/          # Data structures and storage
+├── services/        # Business logic
+├── views/           # Discord UI components
+└── cogs/            # Discord slash commands
+```
+
+## Module Responsibilities
+
+| Directory | Purpose | What Goes Here |
+|-----------|---------|----------------|
+| `config/` | Configuration | Environment variables, constants (ROLES, KEY_LEVELS, PARTY_COMPOSITION) |
+| `models/` | Data Layer | QueueManager, database connection (SQLite), stats tracking |
+| `services/` | Business Logic | Matchmaking algorithms, embed builders, leaderboard formatting |
+| `views/` | Presentation | Discord UI View classes (buttons, selects, modals) |
+| `cogs/` | Commands | Discord slash commands as Cog classes |
+| `bot.py` | Core | LFGBot class with setup_hook() and on_ready() |
+| `main.py` | Entry | Only imports and runs the bot - NO logic |
+
+## Key Files
+
+| File | Purpose |
+|------|---------|
+| `models/database.py` | SQLite connection and schema initialization |
+| `models/queue.py` | In-memory queue management (QueueManager) |
+| `models/stats.py` | Stats database operations (record keys, query leaderboards) |
+| `services/leaderboard.py` | Leaderboard embed builders |
+| `cogs/lfg.py` | LFG commands (/setup, /cola, /salir) |
+| `cogs/stats.py` | Stats commands (/leaderboard, /mystats) + weekly announcement task |
+
+## Rules for Adding New Features
+
+### 1. NEVER add code directly to main.py
+The main.py file should only contain the entry point logic (~20 lines). All new features go in appropriate modules.
+
+### 2. New Discord Commands
+- Add to `cogs/lfg.py` or create a new cog file in `cogs/`
+- Use the discord.py Cog pattern
+- Register in `bot.py` setup_hook()
+
+### 3. New UI Components (Buttons, Selects, Views)
+- Add to appropriate file in `views/`
+- `views/join_queue.py` - Entry point views
+- `views/role_selection.py` - Solo queue role/key selection
+- `views/group_selection.py` - Group queue composition/key selection
+- `views/party.py` - Party formation and confirmation
+
+### 4. New Business Logic
+- Matchmaking algorithms → `services/matchmaking.py`
+- Embed builders → `services/embeds.py`
+- Create new service files for distinct features
+
+### 5. New Constants or Configuration
+- Add to `config/settings.py`
+- Export via `config/__init__.py`
+
+### 6. Queue Operations
+- Always use `QueueManager` from `models/queue.py`
+- Access via `from models import queue_manager`
+- Never manipulate the queue dict directly
+
+**IMPORTANT - Match State Management:**
+- Each queue entry has a `match_message_id` field
+- When a player is in an active match: `match_message_id` is set
+- When a player is waiting: `match_message_id` is `None`
+- **NEVER match players who already have `match_message_id` set** (prevents duplicate group membership)
+- When a match dissolves (<2 players), clear `match_message_id` for remaining players
+- See `BUGFIX_SUMMARY.md` for details on the multiple group membership prevention fix
+
+### 7. Database Operations
+- Use `models/database.py` for connection management
+- Use `models/stats.py` for stats-related queries
+- Database file: `bot_data.db` (SQLite, auto-created)
+- Schema is auto-initialized on first connection
+
+## Import Conventions
+
+```python
+# Configuration
+from config import settings
+from config.settings import ROLES, MIN_KEY_LEVEL, MAX_KEY_LEVEL
+
+# Models
+from models import queue_manager
+from models.queue import QueueManager
+
+# Services
+from services.matchmaking import get_users_with_overlap, is_valid_composition
+from services.embeds import build_match_embed, build_confirmation_embed
+
+# Views
+from views.join_queue import JoinQueueView
+from views.party import PartyCompleteView
+```
+
+## Code Style
+
+- Language: Spanish for user-facing strings, English for code/comments
+- Use type hints for function parameters and returns
+- Document public functions with docstrings
+- Follow PEP 8 conventions
+- Use async/await for Discord operations
+
+### Windows Console Encoding
+
+The bot includes a fix for Windows console encoding in `main.py`:
+
+```python
+import sys
+if sys.platform == 'win32':
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+```
+
+This allows emojis and special characters to display correctly in Windows terminals. Keep this code at the start of `main()` function.
+
+## Discord Slash Command Syncing
+
+### How Command Syncing Works
+
+Discord has two types of slash command registration:
+- **Global commands**: Available in all servers, but can take up to 1 hour to sync
+- **Guild commands**: Server-specific, sync instantly but need to be copied to each guild
+
+### Current Implementation
+
+The bot uses **global commands** + **guild copy** for best of both worlds:
+
+```python
+# In bot.py setup_hook():
+await self.tree.sync()  # Global sync (slow, ~1 hour)
+
+# In bot.py on_ready():
+for guild in self.guilds:
+    self.tree.copy_global_to(guild=guild)  # Copy to guild
+    await self.tree.sync(guild=guild)       # Sync immediately
+```
+
+### Adding New Commands
+
+When you add new slash commands:
+
+1. **Add the command** to the appropriate cog file
+2. **Restart the bot** - commands won't appear until restart
+3. **Wait 10-30 seconds** after bot connects
+4. **Commands appear immediately** in your server (thanks to guild copy)
+
+### Troubleshooting Commands Not Appearing
+
+If commands don't appear after adding them:
+
+1. **Check console output**:
+   ```
+   ✓ [CogName] cog cargado
+   ✅ Comandos sincronizados globalmente
+   ✅ Casa ♥: 19 comandos copiados  ← Should show ~19 commands
+   ```
+
+2. **Verify the number of commands** matches expected count:
+   - LFG commands: 4 (setup, config, verconfig, cola, salir)
+   - Stats commands: 5 (leaderboard, mystats, playerstats, anuncio)
+   - Dev commands: 10 (dev_test, dev_add_player, dev_add_group, etc.)
+   - Total: ~19 commands
+
+3. **Common issues**:
+   - **"0 comandos copiados"**: The `tree.copy_global_to()` line is missing
+   - **Bot not restarted**: Commands only load on bot startup
+   - **Admin-only commands**: Commands with `@app_commands.default_permissions(administrator=True)` only appear for admins
+   - **Discord cache**: Restart Discord client if commands still don't appear
+
+4. **Test with a non-admin command** to verify syncing works:
+   ```python
+   @app_commands.command(name="test")
+   async def test(self, interaction):
+       await interaction.response.send_message("Works!", ephemeral=True)
+   ```
+
+### Development Commands
+
+For testing multi-user scenarios without multiple accounts:
+- Use `/dev_*` commands (admin-only)
+- See `DEV_MODE_GUIDE.md` for complete reference
+- See `QUICK_TEST.md` for 2-minute testing workflows
+
+## Testing New Features
+
+1. **Test in a development Discord server first**
+2. **Use dev commands** for multi-user scenario testing (see `DEV_MODE_GUIDE.md`)
+3. **Verify all button interactions work**
+4. **Test edge cases** (empty queue, full party, etc.)
+5. **Check that existing features still work**
+6. **Verify commands sync** (check console for "X comandos copiados")
+
+## Future Considerations
+
+- Queue persistence: Modify QueueManager to persist to SQLite (currently in-memory)
+- Multi-guild support: Add guild_id to queue and stats entries
+- Admin commands: Create new `cogs/admin.py` cog
+- Key level input: Allow users to input actual key level completed (currently uses range minimum)
+
