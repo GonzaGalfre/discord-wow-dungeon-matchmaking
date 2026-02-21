@@ -30,6 +30,32 @@ const state = {
     guildsInitialized: false,
 };
 
+function normalizeBasePath(rawValue) {
+    const raw = String(rawValue ?? "").trim();
+    if (!raw || raw === "/") {
+        return "";
+    }
+    return raw.endsWith("/") ? raw.slice(0, -1) : raw;
+}
+
+function detectBasePath() {
+    const meta = document.querySelector('meta[name="dashboard-base-path"]');
+    if (meta?.content) {
+        return normalizeBasePath(meta.content);
+    }
+    const path = window.location.pathname || "/";
+    if (path === "/") {
+        return "";
+    }
+    return normalizeBasePath(path);
+}
+
+const BASE_PATH = detectBasePath();
+
+function withBasePath(path) {
+    return `${BASE_PATH}${path}`;
+}
+
 function escapeHtml(value) {
     return String(value ?? "")
         .replaceAll("&", "&amp;")
@@ -349,7 +375,7 @@ async function initializeGuildFilter() {
     }
 
     try {
-        const guilds = await getJson("/api/guilds");
+        const guilds = await getJson(withBasePath("/api/guilds"));
         renderGuildOptions(guilds || []);
     } catch (_error) {
         elements.guildFilter.innerHTML = '<option value="">All guilds</option>';
@@ -366,12 +392,12 @@ async function loadDashboard() {
     try {
         await initializeGuildFilter();
         const queuePath = state.selectedGuildId === null
-            ? "/api/queue"
-            : `/api/queue/${state.selectedGuildId}`;
+            ? withBasePath("/api/queue")
+            : withBasePath(`/api/queue/${state.selectedGuildId}`);
         const [queue, leaderboard, completed] = await Promise.all([
             getJson(queuePath),
-            getJson(buildStatsPath("/api/leaderboard")),
-            getJson(buildStatsPath("/api/completed")),
+            getJson(buildStatsPath(withBasePath("/api/leaderboard"))),
+            getJson(buildStatsPath(withBasePath("/api/completed"))),
         ]);
         const normalizedQueue = normalizeQueuePayload(queue);
         renderQueue(normalizedQueue);
@@ -414,7 +440,7 @@ async function handleClearQueue() {
     const payload = state.selectedGuildId === null
         ? {}
         : { guild_id: state.selectedGuildId };
-    const result = await postJson("/api/admin/queue/clear", payload);
+    const result = await postJson(withBasePath("/api/admin/queue/clear"), payload);
     if (result.scope === "all") {
         setAdminStatus(`Queue cleared for all guilds. Removed ${result.removed_entries} entries.`);
     } else {
@@ -427,7 +453,7 @@ async function handleDevCleanup() {
     const payload = state.selectedGuildId === null
         ? {}
         : { guild_id: state.selectedGuildId };
-    const result = await postJson("/api/admin/dev/cleanup", payload);
+    const result = await postJson(withBasePath("/api/admin/dev/cleanup"), payload);
     if (result.scope === "all") {
         setAdminStatus(`Dev cleanup completed. Removed ${result.removed_entries} fake entries across ${result.touched_guilds} guild(s).`);
     } else {
@@ -437,7 +463,7 @@ async function handleDevCleanup() {
 }
 
 async function handleClearHistory() {
-    const result = await postJson("/api/admin/database/clear-history", { confirm: true });
+    const result = await postJson(withBasePath("/api/admin/database/clear-history"), { confirm: true });
     const deleted = result.deleted || {};
     setAdminStatus(
         `History cleared. Completed keys: ${deleted.completed_keys ?? 0}, `
@@ -448,7 +474,7 @@ async function handleClearHistory() {
 }
 
 async function handleClearLogs() {
-    const result = await postJson("/api/admin/logs/clear", { confirm: true });
+    const result = await postJson(withBasePath("/api/admin/logs/clear"), { confirm: true });
     setAdminStatus(
         `Runtime logs cleared. Removed ${result.removed_lines ?? 0} lines `
         + `(${result.removed_bytes ?? 0} bytes).`
@@ -456,7 +482,7 @@ async function handleClearLogs() {
 }
 
 function handleDownloadLogs() {
-    window.location.href = "/api/admin/logs/download";
+    window.location.href = withBasePath("/api/admin/logs/download");
     setAdminStatus("Downloading runtime logs (events.jsonl)...");
 }
 
@@ -471,7 +497,7 @@ async function handleAddFakePlayer(event) {
         key_min: Number(formData.get("key_min")),
         key_max: Number(formData.get("key_max")),
     };
-    const result = await postJson("/api/admin/dev/add-fake-player", payload);
+    const result = await postJson(withBasePath("/api/admin/dev/add-fake-player"), payload);
     setAdminStatus(`Fake player added (ID ${result.fake_user_id}) to guild ${result.guild_id}.`);
     await loadDashboard();
 }
@@ -489,7 +515,7 @@ async function handleAddFakeGroup(event) {
         key_min: Number(formData.get("key_min")),
         key_max: Number(formData.get("key_max")),
     };
-    const result = await postJson("/api/admin/dev/add-fake-group", payload);
+    const result = await postJson(withBasePath("/api/admin/dev/add-fake-group"), payload);
     setAdminStatus(
         `Fake group added (ID ${result.fake_user_id}, ${result.player_count} players) to guild ${result.guild_id}.`
     );
