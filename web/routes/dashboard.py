@@ -7,6 +7,7 @@ from threading import Lock
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from config.settings import MAX_KEY_LEVEL, MIN_KEY_LEVEL
@@ -15,7 +16,7 @@ from models.guild_settings import get_all_configured_guilds
 from models.queue import queue_manager
 from models.stats import get_all_time_stats, get_weekly_stats
 from services.matchmaking import get_entry_player_count
-from event_logger import clear_event_log, log_event
+from event_logger import clear_event_log, get_event_log_path, log_event
 from views.party import ACTIVE_DM_CONFIRMATIONS
 from web.routes.auth import require_dashboard_auth
 
@@ -489,4 +490,21 @@ def clear_runtime_logs(payload: ClearLogsRequest) -> Dict[str, Any]:
     )
     result["logged_action"] = True
     return result
+
+
+@router.get("/api/admin/logs/download")
+def download_runtime_logs() -> FileResponse:
+    """
+    Download runtime event log file (logs/events.jsonl).
+    """
+    log_path = get_event_log_path()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    if not log_path.exists():
+        log_path.touch()
+
+    return FileResponse(
+        path=log_path,
+        media_type="application/jsonl",
+        filename="events.jsonl",
+    )
 

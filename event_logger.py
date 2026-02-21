@@ -16,6 +16,11 @@ _LOCK = threading.Lock()
 _LOG_PATH = Path(__file__).resolve().parent / "logs" / "events.jsonl"
 
 
+def get_event_log_path() -> Path:
+    """Return the absolute path of the runtime event log file."""
+    return _LOG_PATH
+
+
 def _to_json_safe(value: Any) -> Any:
     """Convert values to JSON-safe representations."""
     if isinstance(value, datetime):

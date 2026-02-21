@@ -19,6 +19,7 @@ const elements = {
     devCleanupBtn: document.getElementById("devCleanupBtn"),
     clearHistoryBtn: document.getElementById("clearHistoryBtn"),
     clearLogsBtn: document.getElementById("clearLogsBtn"),
+    downloadLogsBtn: document.getElementById("downloadLogsBtn"),
     addFakePlayerForm: document.getElementById("addFakePlayerForm"),
     addFakeGroupForm: document.getElementById("addFakeGroupForm"),
     adminActionStatus: document.getElementById("adminActionStatus"),
@@ -454,6 +455,11 @@ async function handleClearLogs() {
     );
 }
 
+function handleDownloadLogs() {
+    window.location.href = "/api/admin/logs/download";
+    setAdminStatus("Downloading runtime logs (events.jsonl)...");
+}
+
 async function handleAddFakePlayer(event) {
     event.preventDefault();
     const guildId = selectedGuildOrThrow();
@@ -543,6 +549,15 @@ elements.clearLogsBtn?.addEventListener("click", () =>
             await handleClearLogs();
         } catch (error) {
             setAdminStatus(`Clear logs failed: ${error.message}`, true);
+        }
+    })
+);
+elements.downloadLogsBtn?.addEventListener("click", () =>
+    withAction(elements.downloadLogsBtn, async () => {
+        try {
+            handleDownloadLogs();
+        } catch (error) {
+            setAdminStatus(`Download logs failed: ${error.message}`, true);
         }
     })
 );
