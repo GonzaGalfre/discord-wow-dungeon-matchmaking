@@ -13,7 +13,7 @@ from web.routes.dashboard import router as dashboard_router
 
 app = FastAPI(
     title="WoW Mythic+ LFG Dashboard",
-    description="Read-only admin dashboard for queues, groups, and leaderboard.",
+    description="Admin dashboard for queues, groups, leaderboard, and testing actions.",
     version="1.0.0",
 )
 

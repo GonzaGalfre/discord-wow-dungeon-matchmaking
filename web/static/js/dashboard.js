@@ -15,6 +15,12 @@ const elements = {
     groupsContent: document.getElementById("groupsContent"),
     leaderboardContent: document.getElementById("leaderboardContent"),
     completedContent: document.getElementById("completedContent"),
+    clearQueueBtn: document.getElementById("clearQueueBtn"),
+    devCleanupBtn: document.getElementById("devCleanupBtn"),
+    clearHistoryBtn: document.getElementById("clearHistoryBtn"),
+    addFakePlayerForm: document.getElementById("addFakePlayerForm"),
+    addFakeGroupForm: document.getElementById("addFakeGroupForm"),
+    adminActionStatus: document.getElementById("adminActionStatus"),
 };
 
 const state = {
@@ -43,6 +49,29 @@ async function getJson(path) {
         throw new Error(`HTTP ${response.status}`);
     }
     return response.json();
+}
+
+async function postJson(path, body) {
+    const response = await fetch(path, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+    });
+
+    let payload = {};
+    try {
+        payload = await response.json();
+    } catch (_error) {
+        payload = {};
+    }
+
+    if (!response.ok) {
+        const detail = payload?.detail || `HTTP ${response.status}`;
+        throw new Error(String(detail));
+    }
+
+    return payload;
 }
 
 function roleLabel(role) {
@@ -236,6 +265,14 @@ function renderError(error) {
     elements.completedContent.innerHTML = message;
 }
 
+function setAdminStatus(message, isError = false) {
+    if (!elements.adminActionStatus) {
+        return;
+    }
+    elements.adminActionStatus.textContent = message;
+    elements.adminActionStatus.classList.toggle("is-error", Boolean(isError));
+}
+
 function normalizeQueuePayload(payload) {
     if (Array.isArray(payload.guilds)) {
         return payload;
@@ -311,11 +348,160 @@ async function loadDashboard() {
     }
 }
 
+function selectedGuildOrThrow() {
+    if (state.selectedGuildId === null) {
+        throw new Error("Select a guild first for this action.");
+    }
+    return state.selectedGuildId;
+}
+
+async function withAction(button, action) {
+    if (!button) {
+        return;
+    }
+    const oldText = button.textContent;
+    button.disabled = true;
+    button.textContent = "Working...";
+    try {
+        await action();
+    } finally {
+        button.disabled = false;
+        button.textContent = oldText;
+    }
+}
+
+async function handleClearQueue() {
+    const payload = state.selectedGuildId === null
+        ? {}
+        : { guild_id: state.selectedGuildId };
+    const result = await postJson("/api/admin/queue/clear", payload);
+    if (result.scope === "all") {
+        setAdminStatus(`Queue cleared for all guilds. Removed ${result.removed_entries} entries.`);
+    } else {
+        setAdminStatus(`Queue cleared for guild ${result.guild_id}. Removed ${result.removed_entries} entries.`);
+    }
+    await loadDashboard();
+}
+
+async function handleDevCleanup() {
+    const payload = state.selectedGuildId === null
+        ? {}
+        : { guild_id: state.selectedGuildId };
+    const result = await postJson("/api/admin/dev/cleanup", payload);
+    if (result.scope === "all") {
+        setAdminStatus(`Dev cleanup completed. Removed ${result.removed_entries} fake entries across ${result.touched_guilds} guild(s).`);
+    } else {
+        setAdminStatus(`Dev cleanup completed for guild ${result.guild_id}. Removed ${result.removed_entries} fake entries.`);
+    }
+    await loadDashboard();
+}
+
+async function handleClearHistory() {
+    const result = await postJson("/api/admin/database/clear-history", { confirm: true });
+    const deleted = result.deleted || {};
+    setAdminStatus(
+        `History cleared. Completed keys: ${deleted.completed_keys ?? 0}, `
+        + `participants: ${deleted.key_participants ?? 0}. `
+        + "Guild settings and queue entries were preserved."
+    );
+    await loadDashboard();
+}
+
+async function handleAddFakePlayer(event) {
+    event.preventDefault();
+    const guildId = selectedGuildOrThrow();
+    const formData = new FormData(elements.addFakePlayerForm);
+    const payload = {
+        guild_id: guildId,
+        username: String(formData.get("name") ?? "").trim(),
+        role: String(formData.get("role") ?? "dps"),
+        key_min: Number(formData.get("key_min")),
+        key_max: Number(formData.get("key_max")),
+    };
+    const result = await postJson("/api/admin/dev/add-fake-player", payload);
+    setAdminStatus(`Fake player added (ID ${result.fake_user_id}) to guild ${result.guild_id}.`);
+    await loadDashboard();
+}
+
+async function handleAddFakeGroup(event) {
+    event.preventDefault();
+    const guildId = selectedGuildOrThrow();
+    const formData = new FormData(elements.addFakeGroupForm);
+    const payload = {
+        guild_id: guildId,
+        leader_name: String(formData.get("leader_name") ?? "").trim(),
+        tanks: Number(formData.get("tanks")),
+        healers: Number(formData.get("healers")),
+        dps: Number(formData.get("dps")),
+        key_min: Number(formData.get("key_min")),
+        key_max: Number(formData.get("key_max")),
+    };
+    const result = await postJson("/api/admin/dev/add-fake-group", payload);
+    setAdminStatus(
+        `Fake group added (ID ${result.fake_user_id}, ${result.player_count} players) to guild ${result.guild_id}.`
+    );
+    await loadDashboard();
+}
+
 elements.guildFilter.addEventListener("change", () => {
     const rawValue = elements.guildFilter.value;
     state.selectedGuildId = rawValue === "" ? null : Number(rawValue);
     loadDashboard();
 });
 elements.refreshBtn.addEventListener("click", loadDashboard);
+elements.clearQueueBtn?.addEventListener("click", () =>
+    withAction(elements.clearQueueBtn, async () => {
+        try {
+            await handleClearQueue();
+        } catch (error) {
+            setAdminStatus(`Queue clear failed: ${error.message}`, true);
+        }
+    })
+);
+elements.devCleanupBtn?.addEventListener("click", () =>
+    withAction(elements.devCleanupBtn, async () => {
+        try {
+            await handleDevCleanup();
+        } catch (error) {
+            setAdminStatus(`Dev cleanup failed: ${error.message}`, true);
+        }
+    })
+);
+elements.clearHistoryBtn?.addEventListener("click", () =>
+    withAction(elements.clearHistoryBtn, async () => {
+        const confirmed = window.confirm(
+            "This will delete leaderboard and key history data only (completed keys + participants). Guild settings and queue will be kept. Continue?"
+        );
+        if (!confirmed) {
+            setAdminStatus("Clear history cancelled.");
+            return;
+        }
+        try {
+            await handleClearHistory();
+        } catch (error) {
+            setAdminStatus(`Clear history failed: ${error.message}`, true);
+        }
+    })
+);
+elements.addFakePlayerForm?.addEventListener("submit", async (event) => {
+    const submitButton = elements.addFakePlayerForm.querySelector('button[type="submit"]');
+    await withAction(submitButton, async () => {
+        try {
+            await handleAddFakePlayer(event);
+        } catch (error) {
+            setAdminStatus(`Add fake player failed: ${error.message}`, true);
+        }
+    });
+});
+elements.addFakeGroupForm?.addEventListener("submit", async (event) => {
+    const submitButton = elements.addFakeGroupForm.querySelector('button[type="submit"]');
+    await withAction(submitButton, async () => {
+        try {
+            await handleAddFakeGroup(event);
+        } catch (error) {
+            setAdminStatus(`Add fake group failed: ${error.message}`, true);
+        }
+    });
+});
 loadDashboard();
 setInterval(loadDashboard, POLL_INTERVAL_MS);

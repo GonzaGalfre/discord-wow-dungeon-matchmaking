@@ -52,6 +52,91 @@
             </article>
         </section>
 
+        <section class="panel admin-actions-panel" aria-label="Dashboard admin actions">
+            <header class="panel-header">
+                <h2>Admin Actions</h2>
+                <span class="pill">Testing Tools</span>
+            </header>
+            <div class="panel-content admin-actions-content">
+                <div class="admin-actions-grid">
+                    <article class="admin-card">
+                        <h3>Queue Controls</h3>
+                        <p class="admin-card-help">Apply to selected guild, or all guilds if no guild is selected.</p>
+                        <button id="clearQueueBtn" type="button" class="danger-button">Remove everyone from queue</button>
+                        <button id="devCleanupBtn" type="button" class="secondary-button">Dev cleanup (remove fake players)</button>
+                        <button id="clearHistoryBtn" type="button" class="danger-button">Clear leaderboard + key history</button>
+                    </article>
+
+                    <article class="admin-card">
+                        <h3>Add Fake Player</h3>
+                        <p class="admin-card-help">Requires a specific guild selected in the top filter.</p>
+                        <form id="addFakePlayerForm" class="admin-form">
+                            <label>
+                                <span>Name</span>
+                                <input id="fakePlayerName" name="name" type="text" placeholder="Alice" maxlength="64" required>
+                            </label>
+                            <label>
+                                <span>Role</span>
+                                <select id="fakePlayerRole" name="role" required>
+                                    <option value="tank">Tank</option>
+                                    <option value="healer">Healer</option>
+                                    <option value="dps" selected>DPS</option>
+                                </select>
+                            </label>
+                            <div class="range-grid">
+                                <label>
+                                    <span>Min key</span>
+                                    <input id="fakePlayerMinKey" name="key_min" type="number" min="2" max="20" value="8" required>
+                                </label>
+                                <label>
+                                    <span>Max key</span>
+                                    <input id="fakePlayerMaxKey" name="key_max" type="number" min="2" max="20" value="12" required>
+                                </label>
+                            </div>
+                            <button type="submit" class="primary-button">Add fake player</button>
+                        </form>
+                    </article>
+
+                    <article class="admin-card">
+                        <h3>Add Fake Group</h3>
+                        <p class="admin-card-help">Requires a specific guild selected in the top filter.</p>
+                        <form id="addFakeGroupForm" class="admin-form">
+                            <label>
+                                <span>Leader name</span>
+                                <input id="fakeGroupLeader" name="leader_name" type="text" placeholder="GroupLead" maxlength="64" required>
+                            </label>
+                            <div class="triple-grid">
+                                <label>
+                                    <span>Tanks</span>
+                                    <input id="fakeGroupTanks" name="tanks" type="number" min="0" max="1" value="1" required>
+                                </label>
+                                <label>
+                                    <span>Healers</span>
+                                    <input id="fakeGroupHealers" name="healers" type="number" min="0" max="1" value="1" required>
+                                </label>
+                                <label>
+                                    <span>DPS</span>
+                                    <input id="fakeGroupDps" name="dps" type="number" min="0" max="3" value="2" required>
+                                </label>
+                            </div>
+                            <div class="range-grid">
+                                <label>
+                                    <span>Min key</span>
+                                    <input id="fakeGroupMinKey" name="key_min" type="number" min="2" max="20" value="8" required>
+                                </label>
+                                <label>
+                                    <span>Max key</span>
+                                    <input id="fakeGroupMaxKey" name="key_max" type="number" min="2" max="20" value="12" required>
+                                </label>
+                            </div>
+                            <button type="submit" class="primary-button">Add fake group</button>
+                        </form>
+                    </article>
+                </div>
+                <p id="adminActionStatus" class="admin-status" aria-live="polite"></p>
+            </div>
+        </section>
+
         <main class="dashboard-grid">
             <section class="panel dashboard-panel">
                 <header class="panel-header">
