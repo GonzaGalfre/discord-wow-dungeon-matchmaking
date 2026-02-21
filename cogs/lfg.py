@@ -12,9 +12,15 @@ from discord.ext import commands
 
 from config.settings import ROLES
 from models.queue import queue_manager
-from models.guild_settings import save_guild_settings, get_guild_settings, update_guild_channel
+from models.guild_settings import (
+    save_guild_settings,
+    get_guild_settings,
+    update_guild_channel,
+    update_lfg_message_id,
+)
 from services.matchmaking import is_group_entry
-from services.embeds import format_entry_composition
+from services.embeds import format_entry_composition, build_lfg_setup_embed
+from services.queue_status import refresh_lfg_setup_message
 from views.join_queue import JoinQueueView
 
 
@@ -58,22 +64,11 @@ class LFGCog(commands.Cog):
             match_channel_id=channel_id,  # Use same channel as default
         )
         
-        embed = discord.Embed(
-            title="🗝️ Buscador de Grupos Mythic+",
-            description=(
-                "¿Buscas gente para hacer mazmorras Mythic+?\n\n"
-                "**Cómo funciona:**\n"
-                "1️⃣ Haz clic en el botón de abajo\n"
-                "2️⃣ Selecciona tu rol (Tanque, Sanador o DPS)\n"
-                "3️⃣ Elige tu rango de llaves preferido\n"
-                "4️⃣ ¡Serás notificado cuando otros busquen lo mismo!\n\n"
-                "*Solo puedes estar en una cola a la vez.*"
-            ),
-            color=discord.Color.blue(),
+        setup_message = await interaction.channel.send(
+            embed=build_lfg_setup_embed(guild_id),
+            view=JoinQueueView(),
         )
-        embed.set_footer(text="¡Feliz cacería de mazmorras! 🎮")
-        
-        await interaction.channel.send(embed=embed, view=JoinQueueView())
+        update_lfg_message_id(guild_id, setup_message.id)
         
         await interaction.response.send_message(
             "✅ ¡El sistema LFG ha sido configurado en este canal!\n\n"
@@ -250,6 +245,7 @@ class LFGCog(commands.Cog):
         has_match = entry and entry.get("match_message_id") is not None
         
         if queue_manager.remove(guild_id, user_id):
+            await refresh_lfg_setup_message(interaction.client, guild_id, interaction.channel)
             if was_group:
                 if has_match:
                     await interaction.response.send_message(

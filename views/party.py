@@ -12,6 +12,7 @@ from models.queue import queue_manager
 from models.stats import record_completed_key
 from services.matchmaking import is_group_entry, calculate_common_range
 from services.embeds import build_match_embed, build_confirmation_embed, format_entry_composition
+from services.queue_status import refresh_lfg_setup_message
 
 
 class ConfirmationView(discord.ui.View):
@@ -112,6 +113,8 @@ class ConfirmationView(discord.ui.View):
                         removed_entries.append(f"<@{uid}>")
                 
                 queue_manager.remove(self.guild_id, uid)
+
+            await refresh_lfg_setup_message(interaction.client, self.guild_id, interaction.channel)
             
             # Calculate the key level (use the common range minimum)
             common_range = calculate_common_range(participants)
@@ -167,6 +170,8 @@ class ConfirmationView(discord.ui.View):
         
         # Remove user/group from queue
         was_in_queue = queue_manager.remove(self.guild_id, user_id)
+        if was_in_queue:
+            await refresh_lfg_setup_message(interaction.client, self.guild_id, interaction.channel)
         
         if was_in_queue:
             if was_group:
@@ -336,6 +341,8 @@ class PartyCompleteView(discord.ui.View):
                         "key_max": entry["key_max"],
                     })
                 queue_manager.remove(self.guild_id, uid)
+
+            await refresh_lfg_setup_message(interaction.client, self.guild_id, interaction.channel)
             
             # Calculate the key level
             from services.matchmaking import calculate_common_range
@@ -431,6 +438,8 @@ class PartyCompleteView(discord.ui.View):
         was_group = entry and is_group_entry(entry)
         
         was_in_queue = queue_manager.remove(self.guild_id, user_id)
+        if was_in_queue:
+            await refresh_lfg_setup_message(interaction.client, self.guild_id, interaction.channel)
         
         if was_in_queue:
             if was_group:

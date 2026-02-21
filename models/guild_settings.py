@@ -24,12 +24,19 @@ def _ensure_guild_settings_table() -> None:
             guild_id INTEGER PRIMARY KEY,
             guild_name TEXT NOT NULL,
             lfg_channel_id INTEGER,
+            lfg_message_id INTEGER,
             match_channel_id INTEGER,
             announcement_channel_id INTEGER,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+
+    # Lightweight migration for existing databases.
+    cursor.execute("PRAGMA table_info(guild_settings)")
+    columns = {row[1] for row in cursor.fetchall()}
+    if "lfg_message_id" not in columns:
+        cursor.execute("ALTER TABLE guild_settings ADD COLUMN lfg_message_id INTEGER")
     
     conn.commit()
 
@@ -50,7 +57,7 @@ def get_guild_settings(guild_id: int) -> Optional[Dict]:
     cursor = conn.cursor()
     
     cursor.execute("""
-        SELECT guild_id, guild_name, lfg_channel_id, match_channel_id, announcement_channel_id
+        SELECT guild_id, guild_name, lfg_channel_id, lfg_message_id, match_channel_id, announcement_channel_id
         FROM guild_settings
         WHERE guild_id = ?
     """, (guild_id,))
@@ -63,6 +70,7 @@ def save_guild_settings(
     guild_id: int,
     guild_name: str,
     lfg_channel_id: Optional[int] = None,
+    lfg_message_id: Optional[int] = None,
     match_channel_id: Optional[int] = None,
     announcement_channel_id: Optional[int] = None
 ) -> None:
@@ -73,6 +81,7 @@ def save_guild_settings(
         guild_id: Discord guild ID
         guild_name: Guild name for reference
         lfg_channel_id: Channel where the LFG button is posted
+        lfg_message_id: Message ID of the persistent LFG setup message
         match_channel_id: Channel where match notifications are posted
         announcement_channel_id: Channel for weekly announcements
     """
@@ -91,17 +100,18 @@ def save_guild_settings(
             UPDATE guild_settings
             SET guild_name = ?,
                 lfg_channel_id = COALESCE(?, lfg_channel_id),
+                lfg_message_id = COALESCE(?, lfg_message_id),
                 match_channel_id = COALESCE(?, match_channel_id),
                 announcement_channel_id = COALESCE(?, announcement_channel_id),
                 updated_at = CURRENT_TIMESTAMP
             WHERE guild_id = ?
-        """, (guild_name, lfg_channel_id, match_channel_id, announcement_channel_id, guild_id))
+        """, (guild_name, lfg_channel_id, lfg_message_id, match_channel_id, announcement_channel_id, guild_id))
     else:
         # Insert new
         cursor.execute("""
-            INSERT INTO guild_settings (guild_id, guild_name, lfg_channel_id, match_channel_id, announcement_channel_id)
-            VALUES (?, ?, ?, ?, ?)
-        """, (guild_id, guild_name, lfg_channel_id, match_channel_id, announcement_channel_id))
+            INSERT INTO guild_settings (guild_id, guild_name, lfg_channel_id, lfg_message_id, match_channel_id, announcement_channel_id)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (guild_id, guild_name, lfg_channel_id, lfg_message_id, match_channel_id, announcement_channel_id))
     
     conn.commit()
 
@@ -160,7 +170,7 @@ def get_all_configured_guilds() -> list:
     cursor = conn.cursor()
     
     cursor.execute("""
-        SELECT guild_id, guild_name, lfg_channel_id, match_channel_id, announcement_channel_id
+        SELECT guild_id, guild_name, lfg_channel_id, lfg_message_id, match_channel_id, announcement_channel_id
         FROM guild_settings
     """)
     
@@ -197,6 +207,51 @@ def get_announcement_channel_id(guild_id: int) -> Optional[int]:
     if settings:
         return settings.get("announcement_channel_id")
     return None
+
+
+def get_lfg_message_id(guild_id: int) -> Optional[int]:
+    """
+    Get the LFG setup message ID for a guild.
+
+    Args:
+        guild_id: Discord guild ID
+
+    Returns:
+        LFG setup message ID, or None if not configured
+    """
+    settings = get_guild_settings(guild_id)
+    if settings:
+        return settings.get("lfg_message_id")
+    return None
+
+
+def update_lfg_message_id(guild_id: int, message_id: int) -> bool:
+    """
+    Update the LFG setup message ID for a guild.
+
+    Args:
+        guild_id: Discord guild ID
+        message_id: Message ID of the persistent LFG setup message
+
+    Returns:
+        True if updated, False if guild not found
+    """
+    _ensure_guild_settings_table()
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        UPDATE guild_settings
+        SET lfg_message_id = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE guild_id = ?
+        """,
+        (message_id, guild_id),
+    )
+
+    conn.commit()
+    return cursor.rowcount > 0
 
 
 

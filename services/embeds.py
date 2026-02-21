@@ -15,6 +15,7 @@ from models.queue import queue_manager
 from services.matchmaking import (
     calculate_common_range,
     get_role_counts,
+    get_entry_player_count,
     is_group_entry,
 )
 
@@ -205,4 +206,63 @@ def build_confirmation_embed(
     total_count = len(matched_user_ids)
     embed.set_footer(text=f"Confirmados: {confirmed_count}/{total_count}")
     
+    return embed
+
+
+def get_queue_role_counts(guild_id: int) -> dict:
+    """
+    Count queued players per role for a guild.
+
+    Counts real players represented by each entry:
+    - Solo entry contributes 1 to its selected role
+    - Group entry contributes its full composition
+    """
+    counts = {"tank": 0, "healer": 0, "dps": 0}
+    for _, entry in queue_manager.items(guild_id):
+        composition = entry.get("composition")
+        if composition:
+            counts["tank"] += composition.get("tank", 0)
+            counts["healer"] += composition.get("healer", 0)
+            counts["dps"] += composition.get("dps", 0)
+        else:
+            role = entry.get("role")
+            if role in counts:
+                counts[role] += 1
+    return counts
+
+
+def build_lfg_setup_embed(guild_id: int) -> discord.Embed:
+    """
+    Build the main LFG setup embed with live queue stats.
+    """
+    role_counts = get_queue_role_counts(guild_id)
+    total_entries = queue_manager.count(guild_id)
+    total_players = sum(get_entry_player_count(entry) for _, entry in queue_manager.items(guild_id))
+
+    embed = discord.Embed(
+        title="🗝️ Buscador de Grupos Mythic+",
+        description=(
+            "¿Buscas gente para hacer mazmorras Mythic+?\n\n"
+            "**Cómo funciona:**\n"
+            "1️⃣ Haz clic en el botón de abajo\n"
+            "2️⃣ Selecciona tu rol (Tanque, Sanador o DPS)\n"
+            "3️⃣ Elige tu rango de llaves preferido\n"
+            "4️⃣ ¡Serás notificado cuando otros busquen lo mismo!\n\n"
+            "*Solo puedes estar en una cola a la vez.*"
+        ),
+        color=discord.Color.blue(),
+    )
+
+    embed.add_field(
+        name="📊 Cola en vivo",
+        value=(
+            f"**Jugadores en cola:** {total_players}\n"
+            f"🛡️ **Tanques:** {role_counts['tank']}\n"
+            f"💚 **Sanadores:** {role_counts['healer']}\n"
+            f"⚔️ **DPS:** {role_counts['dps']}"
+        ),
+        inline=False,
+    )
+
+    embed.set_footer(text=f"Entradas en cola: {total_entries} • ¡Feliz cacería de mazmorras! 🎮")
     return embed

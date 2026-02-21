@@ -14,6 +14,7 @@ from models.queue import queue_manager
 from models.guild_settings import get_match_channel_id
 from services.matchmaking import get_users_with_overlap
 from services.embeds import build_match_embed
+from services.queue_status import refresh_lfg_setup_message
 from views.role_selection import delete_old_match_messages
 
 # Avoid circular imports
@@ -74,6 +75,7 @@ class GroupKeyRangeMaxSelectView(discord.ui.View):
         
         # Add the group to the queue
         queue_manager.add(guild_id, user_id, username, self.key_min, key_max, composition=self.composition)
+        await refresh_lfg_setup_message(interaction.client, guild_id, interaction.channel)
         
         # Search for matches
         matches = get_users_with_overlap(guild_id, self.key_min, key_max, user_id)
