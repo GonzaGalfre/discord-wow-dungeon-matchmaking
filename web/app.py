@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from web.routes.auth import require_dashboard_auth
 from web.routes.dashboard import router as dashboard_router
@@ -17,6 +18,11 @@ app = FastAPI(
 )
 
 app.include_router(dashboard_router, tags=["dashboard"])
+app.mount(
+    "/static",
+    StaticFiles(directory=Path(__file__).parent / "static"),
+    name="static",
+)
 
 
 @app.get("/", response_class=HTMLResponse, dependencies=[Depends(require_dashboard_auth)])

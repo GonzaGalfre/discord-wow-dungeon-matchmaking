@@ -1,0 +1,321 @@
+const POLL_INTERVAL_MS = 10000;
+
+const elements = {
+    refreshBtn: document.getElementById("refreshBtn"),
+    guildFilter: document.getElementById("guildFilter"),
+    lastUpdated: document.getElementById("lastUpdated"),
+    metricQueueTotal: document.getElementById("metricQueueTotal"),
+    metricGroupsTotal: document.getElementById("metricGroupsTotal"),
+    metricWeeklyKeys: document.getElementById("metricWeeklyKeys"),
+    metricMaxKey: document.getElementById("metricMaxKey"),
+    queueTotal: document.getElementById("queueTotal"),
+    groupsTotal: document.getElementById("groupsTotal"),
+    leaderboardTotal: document.getElementById("leaderboardTotal"),
+    queueContent: document.getElementById("queueContent"),
+    groupsContent: document.getElementById("groupsContent"),
+    leaderboardContent: document.getElementById("leaderboardContent"),
+    completedContent: document.getElementById("completedContent"),
+};
+
+const state = {
+    selectedGuildId: null,
+    guildsInitialized: false,
+};
+
+function escapeHtml(value) {
+    return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
+}
+
+function formatTime(date) {
+    return new Intl.DateTimeFormat(undefined, {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+    }).format(date);
+}
+
+async function getJson(path) {
+    const response = await fetch(path, { credentials: "same-origin" });
+    if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+    }
+    return response.json();
+}
+
+function roleLabel(role) {
+    if (role === "tank") return "tank";
+    if (role === "healer") return "healer";
+    if (role === "dps") return "dps";
+    return "group";
+}
+
+function roleClass(role) {
+    if (role === "tank") return "role-tank";
+    if (role === "healer") return "role-healer";
+    if (role === "dps") return "role-dps";
+    return "role-group";
+}
+
+function rolePill(role) {
+    const label = roleLabel(role);
+    return `<span class="role-pill ${roleClass(role)}">${label}</span>`;
+}
+
+function updateMetric(target, value) {
+    target.textContent = value;
+    target.classList.remove("value-fade");
+    void target.offsetWidth;
+    target.classList.add("value-fade");
+}
+
+function renderQueue(data) {
+    const guilds = data.guilds || [];
+    const totalInQueue = data.total_in_queue ?? 0;
+    elements.queueTotal.textContent = `${totalInQueue} players`;
+    updateMetric(elements.metricQueueTotal, `${totalInQueue}`);
+
+    if (!guilds.length) {
+        elements.queueContent.innerHTML = '<p class="state-message">No guild data yet.</p>';
+        return;
+    }
+
+    elements.queueContent.innerHTML = guilds
+        .map((guild) => {
+            const entries = guild.entries || [];
+            const rows = entries.length
+                ? entries
+                    .map((entry) => `
+                        <tr>
+                            <td>${escapeHtml(entry.username)}</td>
+                            <td>${rolePill(entry.role)}</td>
+                            <td>+${entry.key_min}-${entry.key_max}</td>
+                        </tr>
+                    `)
+                    .join("")
+                : '<tr><td colspan="3" class="state-message">Queue empty.</td></tr>';
+
+            return `
+                <article class="queue-guild">
+                    <header class="queue-guild-head">
+                        <p class="queue-guild-name">${escapeHtml(guild.guild_name)}</p>
+                        <span class="pill pill-neutral">${guild.count} in queue</span>
+                    </header>
+                    <div class="queue-table-wrap">
+                        <table class="queue-table">
+                            <thead>
+                                <tr>
+                                    <th>Player</th>
+                                    <th>Role</th>
+                                    <th>Range</th>
+                                </tr>
+                            </thead>
+                            <tbody>${rows}</tbody>
+                        </table>
+                    </div>
+                </article>
+            `;
+        })
+        .join("");
+}
+
+function renderGroups(queueData) {
+    const allGroups = [];
+    (queueData.guilds || []).forEach((guild) => {
+        (guild.active_matches || []).forEach((group) => {
+            allGroups.push({
+                guildName: guild.guild_name,
+                totalPlayers: group.total_players ?? 0,
+                entries: group.entries || [],
+            });
+        });
+    });
+
+    elements.groupsTotal.textContent = `${allGroups.length} active`;
+    updateMetric(elements.metricGroupsTotal, `${allGroups.length}`);
+
+    if (!allGroups.length) {
+        elements.groupsContent.innerHTML = '<p class="state-message">No active groups forming right now.</p>';
+        return;
+    }
+
+    elements.groupsContent.innerHTML = `
+        <div class="groups-grid">
+            ${allGroups
+                .map((group) => {
+                    const fillPercent = Math.max(0, Math.min(100, (group.totalPlayers / 5) * 100));
+                    return `
+                        <article class="group-card">
+                            <header class="group-head">
+                                <p class="group-name">${escapeHtml(group.guildName)}</p>
+                                <span class="pill">${group.totalPlayers}/5</span>
+                            </header>
+                            <div class="group-progress">
+                                <div class="group-progress-fill" style="width:${fillPercent}%"></div>
+                            </div>
+                            <ul class="member-list">
+                                ${group.entries
+                                    .map(
+                                        (entry) => `
+                                            <li>
+                                                <span>${escapeHtml(entry.username)}</span>
+                                                ${rolePill(entry.role)}
+                                            </li>
+                                        `
+                                    )
+                                    .join("")}
+                            </ul>
+                        </article>
+                    `;
+                })
+                .join("")}
+        </div>
+    `;
+}
+
+function renderLeaderboard(data) {
+    const players = data.player_stats || data.top_players || [];
+    elements.leaderboardTotal.textContent = `Total keys ${data.total_keys ?? 0}`;
+
+    if (!players.length) {
+        elements.leaderboardContent.innerHTML = '<p class="state-message">No leaderboard data yet.</p>';
+        return;
+    }
+
+    elements.leaderboardContent.innerHTML = `
+        <ol class="leaderboard-list">
+            ${players
+                .slice(0, 10)
+                .map(
+                    (player, index) => `
+                        <li class="leaderboard-item">
+                            <span class="leaderboard-rank">#${index + 1}</span>
+                            <span>${escapeHtml(player.username)}</span>
+                            <span class="leaderboard-keys">${player.key_count} keys</span>
+                        </li>
+                    `
+                )
+                .join("")}
+        </ol>
+    `;
+}
+
+function renderCompleted(data) {
+    const totalKeys = data.total_keys ?? 0;
+    const avgLevel = data.avg_key_level ?? 0;
+    const maxLevel = data.max_key_level ?? 0;
+
+    updateMetric(elements.metricWeeklyKeys, `${totalKeys}`);
+    updateMetric(elements.metricMaxKey, `${maxLevel}`);
+
+    elements.completedContent.innerHTML = `
+        <div class="completed-grid">
+            <article class="completed-stat">
+                <p class="completed-stat-label">Total Keys</p>
+                <p class="completed-stat-value">${totalKeys}</p>
+            </article>
+            <article class="completed-stat">
+                <p class="completed-stat-label">Average Level</p>
+                <p class="completed-stat-value">${avgLevel}</p>
+            </article>
+            <article class="completed-stat">
+                <p class="completed-stat-label">Max Level</p>
+                <p class="completed-stat-value">${maxLevel}</p>
+            </article>
+        </div>
+    `;
+}
+
+function renderError(error) {
+    const message = `<div class="status-error">Failed to load dashboard data: ${escapeHtml(error.message)}</div>`;
+    elements.queueContent.innerHTML = message;
+    elements.groupsContent.innerHTML = message;
+    elements.leaderboardContent.innerHTML = message;
+    elements.completedContent.innerHTML = message;
+}
+
+function normalizeQueuePayload(payload) {
+    if (Array.isArray(payload.guilds)) {
+        return payload;
+    }
+
+    const count = payload.count ?? 0;
+    return {
+        total_in_queue: count,
+        guilds: [payload],
+    };
+}
+
+function buildStatsPath(basePath) {
+    const params = new URLSearchParams({ period: "weekly" });
+    if (state.selectedGuildId !== null) {
+        params.set("guild_id", String(state.selectedGuildId));
+    }
+    return `${basePath}?${params.toString()}`;
+}
+
+function renderGuildOptions(guilds) {
+    const previous = state.selectedGuildId === null ? "" : String(state.selectedGuildId);
+    const options = ['<option value="">All guilds</option>'];
+    guilds.forEach((guild) => {
+        options.push(`<option value="${guild.guild_id}">${escapeHtml(guild.guild_name)}</option>`);
+    });
+    elements.guildFilter.innerHTML = options.join("");
+    elements.guildFilter.value = previous;
+}
+
+async function initializeGuildFilter() {
+    if (state.guildsInitialized) {
+        return;
+    }
+
+    try {
+        const guilds = await getJson("/api/guilds");
+        renderGuildOptions(guilds || []);
+    } catch (_error) {
+        elements.guildFilter.innerHTML = '<option value="">All guilds</option>';
+    } finally {
+        state.guildsInitialized = true;
+    }
+}
+
+async function loadDashboard() {
+    elements.refreshBtn.disabled = true;
+    elements.guildFilter.disabled = true;
+    elements.refreshBtn.textContent = "Syncing...";
+
+    try {
+        await initializeGuildFilter();
+        const queuePath = state.selectedGuildId === null
+            ? "/api/queue"
+            : `/api/queue/${state.selectedGuildId}`;
+        const [queue, leaderboard, completed] = await Promise.all([
+            getJson(queuePath),
+            getJson(buildStatsPath("/api/leaderboard")),
+            getJson(buildStatsPath("/api/completed")),
+        ]);
+        const normalizedQueue = normalizeQueuePayload(queue);
+        renderQueue(normalizedQueue);
+        renderGroups(normalizedQueue);
+        renderLeaderboard(leaderboard);
+        renderCompleted(completed);
+        elements.lastUpdated.textContent = `Last sync: ${formatTime(new Date())}`;
+    } catch (error) {
+        renderError(error);
+    } finally {
+        elements.refreshBtn.disabled = false;
+        elements.guildFilter.disabled = false;
+        elements.refreshBtn.textContent = "Refresh now";
+    }
+}
+
+elements.guildFilter.addEventListener("change", () => {
+    const rawValue = elements.guildFilter.value;
+    state.selectedGuildId = rawValue === "" ? null : Number(rawValue);
+    loadDashboard();
+});
+elements.refreshBtn.addEventListener("click", loadDashboard);
+loadDashboard();
+setInterval(loadDashboard, POLL_INTERVAL_MS);
