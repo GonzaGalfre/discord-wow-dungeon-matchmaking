@@ -22,6 +22,7 @@ from web.routes.auth import require_dashboard_auth
 
 router = APIRouter(dependencies=[Depends(require_dashboard_auth)])
 FAKE_USER_ID_START = 900000000000000000
+JS_SAFE_INTEGER_MAX = 9007199254740991
 _fake_user_id_counter = FAKE_USER_ID_START
 _fake_id_lock = Lock()
 
@@ -85,6 +86,22 @@ def _serialize_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
     timestamp = value.get("timestamp")
     if isinstance(timestamp, datetime):
         value["timestamp"] = timestamp.isoformat()
+    return value
+
+
+def _json_safe(value: Any) -> Any:
+    """
+    Convert values to JSON-safe primitives for JavaScript clients.
+
+    Discord snowflake IDs exceed JS safe integer range, so convert those
+    large integers to strings to avoid precision loss in the browser.
+    """
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, int) and abs(value) > JS_SAFE_INTEGER_MAX:
+        return str(value)
     return value
 
 
@@ -174,7 +191,7 @@ def get_guilds() -> List[Dict[str, Any]]:
     """
     Return configured guild list from database.
     """
-    return get_all_configured_guilds()
+    return _json_safe(get_all_configured_guilds())
 
 
 @router.get("/api/queue")
@@ -204,7 +221,7 @@ def get_queue_status() -> Dict[str, Any]:
             }
         )
 
-    return {"total_in_queue": total_in_queue, "guilds": guilds}
+    return _json_safe({"total_in_queue": total_in_queue, "guilds": guilds})
 
 
 @router.get("/api/queue/{guild_id}")
@@ -215,14 +232,14 @@ def get_queue_by_guild(guild_id: int) -> Dict[str, Any]:
     name_map = _guild_name_map()
     entries = queue_manager.get_all_entries(guild_id)
 
-    return {
+    return _json_safe({
         "guild_id": guild_id,
         "guild_name": name_map.get(guild_id, f"Guild {guild_id}"),
         "count": len(entries),
         "entries": [_serialize_entry(entry) for entry in entries],
         "active_matches": _active_matches(guild_id),
         "pending_confirmations": _pending_confirmations(guild_id),
-    }
+    })
 
 
 @router.get("/api/leaderboard")
@@ -235,10 +252,10 @@ def get_leaderboard(
     """
     if period == "alltime":
         stats = get_all_time_stats(guild_id=guild_id)
-        return {"period": period, **stats}
+        return _json_safe({"period": period, **stats})
 
     stats = get_weekly_stats(guild_id=guild_id)
-    return {"period": period, **stats}
+    return _json_safe({"period": period, **stats})
 
 
 @router.get("/api/completed")
@@ -251,23 +268,23 @@ def get_completed_keys(
     """
     if period == "alltime":
         stats = get_all_time_stats(guild_id=guild_id)
-        return {
+        return _json_safe({
             "period": period,
             "guild_id": guild_id,
             "total_keys": stats["total_keys"],
             "avg_key_level": stats["avg_key_level"],
             "max_key_level": stats["max_key_level"],
-        }
+        })
 
     stats = get_weekly_stats(guild_id=guild_id)
-    return {
+    return _json_safe({
         "period": period,
         "guild_id": guild_id,
         "week_number": stats["week_number"],
         "total_keys": stats["total_keys"],
         "avg_key_level": stats["avg_key_level"],
         "max_key_level": stats["max_key_level"],
-    }
+    })
 
 
 @router.post("/api/admin/queue/clear")
@@ -284,11 +301,11 @@ def clear_queue(payload: QueueClearRequest) -> Dict[str, Any]:
             guild_id=payload.guild_id,
             removed_entries=removed,
         )
-        return {
+        return _json_safe({
             "scope": "guild",
             "guild_id": payload.guild_id,
             "removed_entries": removed,
-        }
+        })
 
     removed = queue_manager.total_count()
     queue_manager.clear_all()
@@ -297,7 +314,7 @@ def clear_queue(payload: QueueClearRequest) -> Dict[str, Any]:
         scope="all",
         removed_entries=removed,
     )
-    return {"scope": "all", "removed_entries": removed}
+    return _json_safe({"scope": "all", "removed_entries": removed})
 
 
 @router.post("/api/admin/dev/add-fake-player")
@@ -329,12 +346,12 @@ def add_fake_player(payload: FakePlayerRequest) -> Dict[str, Any]:
         key_min=payload.key_min,
         key_max=payload.key_max,
     )
-    return {
+    return _json_safe({
         "ok": True,
         "guild_id": payload.guild_id,
         "entry_type": "solo",
         "fake_user_id": fake_user_id,
-    }
+    })
 
 
 @router.post("/api/admin/dev/add-fake-group")
@@ -371,13 +388,13 @@ def add_fake_group(payload: FakeGroupRequest) -> Dict[str, Any]:
         key_min=payload.key_min,
         key_max=payload.key_max,
     )
-    return {
+    return _json_safe({
         "ok": True,
         "guild_id": payload.guild_id,
         "entry_type": "group",
         "fake_user_id": fake_user_id,
         "player_count": total,
-    }
+    })
 
 
 @router.post("/api/admin/dev/cleanup")
@@ -413,12 +430,12 @@ def cleanup_fake_players(payload: FakeCleanupRequest) -> Dict[str, Any]:
         touched_guilds=touched_guilds,
     )
 
-    return {
+    return _json_safe({
         "scope": "guild" if payload.guild_id is not None else "all",
         "guild_id": payload.guild_id,
         "removed_entries": removed,
         "touched_guilds": touched_guilds,
-    }
+    })
 
 
 @router.post("/api/admin/database/clear-history")

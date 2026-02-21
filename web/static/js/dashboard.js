@@ -26,6 +26,7 @@ const elements = {
 };
 
 const state = {
+    // Keep guild IDs as strings to preserve Discord snowflake precision.
     selectedGuildId: null,
     guildsInitialized: false,
 };
@@ -183,7 +184,10 @@ function renderGroups(queueData) {
     (queueData.guilds || []).forEach((guild) => {
         const pendingBySignature = new Set();
         (guild.pending_confirmations || []).forEach((group) => {
-            const signature = (group.user_ids || []).slice().sort((a, b) => a - b).join(",");
+            const signature = (group.user_ids || [])
+                .map((value) => String(value))
+                .sort()
+                .join(",");
             if (signature) {
                 pendingBySignature.add(signature);
             }
@@ -200,9 +204,9 @@ function renderGroups(queueData) {
 
         (guild.active_matches || []).forEach((group) => {
             const signature = (group.entries || [])
-                .map((entry) => entry.user_id)
-                .filter((value) => Number.isFinite(value))
-                .sort((a, b) => a - b)
+                .map((entry) => String(entry.user_id ?? ""))
+                .filter((value) => value !== "")
+                .sort()
                 .join(",");
             if (signature && pendingBySignature.has(signature)) {
                 return; // Already represented as a pending-confirmation group
@@ -524,7 +528,7 @@ async function handleAddFakeGroup(event) {
 
 elements.guildFilter.addEventListener("change", () => {
     const rawValue = elements.guildFilter.value;
-    state.selectedGuildId = rawValue === "" ? null : Number(rawValue);
+    state.selectedGuildId = rawValue === "" ? null : rawValue;
     loadDashboard();
 });
 elements.refreshBtn.addEventListener("click", loadDashboard);
