@@ -14,6 +14,7 @@ from models.queue import queue_manager
 from models.guild_settings import get_match_channel_id
 from services.matchmaking import get_users_with_overlap
 from services.embeds import build_match_embed
+from event_logger import log_event
 from services.queue_status import refresh_lfg_setup_message
 
 # Avoid circular imports
@@ -50,6 +51,13 @@ async def delete_old_match_messages(client: discord.Client, guild_id: int, user_
             if channel:
                 message = await channel.fetch_message(message_id)
                 await message.delete()
+                log_event(
+                    "match_message_deleted_for_refresh",
+                    guild_id=guild_id,
+                    channel_id=channel_id,
+                    message_id=message_id,
+                    affected_user_ids=user_ids,
+                )
         except (discord.errors.NotFound, discord.errors.Forbidden):
             # Message already deleted or no permission
             pass
@@ -179,6 +187,15 @@ class KeyRangeMaxSelectView(discord.ui.View):
                     content=mentions,
                     embed=embed,
                     view=PartyCompleteView(guild_id, matched_user_ids),
+                )
+                log_event(
+                    "match_message_created",
+                    guild_id=guild_id,
+                    channel_id=match_channel.id,
+                    message_id=match_message.id,
+                    matched_user_ids=matched_user_ids,
+                    triggered_by_user_id=user_id,
+                    source="solo_queue",
                 )
                 
                 # Store the message reference for ALL matched users (including new one)

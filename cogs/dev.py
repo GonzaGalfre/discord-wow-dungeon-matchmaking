@@ -25,6 +25,7 @@ from services.matchmaking import (
     get_role_counts,
 )
 from services.embeds import build_match_embed
+from event_logger import log_event
 from views.party import PartyCompleteView
 from views.role_selection import delete_old_match_messages
 
@@ -130,6 +131,15 @@ class DevCog(commands.Cog):
                     content=f"🔧 **[DEV MATCH AUTO]** {mentions}",
                     embed=embed,
                     view=PartyCompleteView(guild_id, matched_user_ids),
+                )
+                log_event(
+                    "match_message_created",
+                    guild_id=guild_id,
+                    channel_id=match_channel.id,
+                    message_id=match_message.id,
+                    matched_user_ids=matched_user_ids,
+                    triggered_by_user_id=interaction.user.id,
+                    source="dev_add_player",
                 )
                 
                 # Store match message reference for ALL users
@@ -268,6 +278,15 @@ class DevCog(commands.Cog):
                     content=f"🔧 **[DEV MATCH AUTO]** {mentions}",
                     embed=embed,
                     view=PartyCompleteView(guild_id, matched_user_ids),
+                )
+                log_event(
+                    "match_message_created",
+                    guild_id=guild_id,
+                    channel_id=match_channel.id,
+                    message_id=match_message.id,
+                    matched_user_ids=matched_user_ids,
+                    triggered_by_user_id=interaction.user.id,
+                    source="dev_add_group",
                 )
                 
                 # Store match message reference for ALL users
@@ -467,6 +486,15 @@ class DevCog(commands.Cog):
                 content=f"🔧 **[DEV MATCH]** {mentions}",
                 embed=embed,
                 view=PartyCompleteView(guild_id, matched_user_ids),
+            )
+            log_event(
+                "match_message_created",
+                guild_id=guild_id,
+                channel_id=match_channel.id,
+                message_id=match_message.id,
+                matched_user_ids=matched_user_ids,
+                triggered_by_user_id=interaction.user.id,
+                source="dev_force_match",
             )
             
             # Store match message reference for ALL users

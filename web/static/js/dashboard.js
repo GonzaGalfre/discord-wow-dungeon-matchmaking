@@ -18,6 +18,7 @@ const elements = {
     clearQueueBtn: document.getElementById("clearQueueBtn"),
     devCleanupBtn: document.getElementById("devCleanupBtn"),
     clearHistoryBtn: document.getElementById("clearHistoryBtn"),
+    clearLogsBtn: document.getElementById("clearLogsBtn"),
     addFakePlayerForm: document.getElementById("addFakePlayerForm"),
     addFakeGroupForm: document.getElementById("addFakeGroupForm"),
     adminActionStatus: document.getElementById("adminActionStatus"),
@@ -153,11 +154,40 @@ function renderQueue(data) {
 function renderGroups(queueData) {
     const allGroups = [];
     (queueData.guilds || []).forEach((guild) => {
-        (guild.active_matches || []).forEach((group) => {
+        const pendingBySignature = new Set();
+        (guild.pending_confirmations || []).forEach((group) => {
+            const signature = (group.user_ids || []).slice().sort((a, b) => a - b).join(",");
+            if (signature) {
+                pendingBySignature.add(signature);
+            }
             allGroups.push({
                 guildName: guild.guild_name,
                 totalPlayers: group.total_players ?? 0,
                 entries: group.entries || [],
+                phase: "awaiting_confirmation",
+                confirmationTotal: group.confirmation_targets_total ?? 0,
+                confirmationConfirmed: group.confirmation_targets_confirmed ?? 0,
+                fallbackCount: group.channel_fallback_count ?? 0,
+            });
+        });
+
+        (guild.active_matches || []).forEach((group) => {
+            const signature = (group.entries || [])
+                .map((entry) => entry.user_id)
+                .filter((value) => Number.isFinite(value))
+                .sort((a, b) => a - b)
+                .join(",");
+            if (signature && pendingBySignature.has(signature)) {
+                return; // Already represented as a pending-confirmation group
+            }
+            allGroups.push({
+                guildName: guild.guild_name,
+                totalPlayers: group.total_players ?? 0,
+                entries: group.entries || [],
+                phase: "forming",
+                confirmationTotal: 0,
+                confirmationConfirmed: 0,
+                fallbackCount: 0,
             });
         });
     });
@@ -175,12 +205,21 @@ function renderGroups(queueData) {
             ${allGroups
                 .map((group) => {
                     const fillPercent = Math.max(0, Math.min(100, (group.totalPlayers / 5) * 100));
+                    const isPending = group.phase === "awaiting_confirmation";
+                    const statusLabel = isPending
+                        ? `Waiting confirmations ${group.confirmationConfirmed}/${group.confirmationTotal}`
+                        : "Forming";
+                    const fallbackNote = isPending && group.fallbackCount > 0
+                        ? `<p class="group-subtext">${group.fallbackCount} confirming in channel (DM fallback)</p>`
+                        : "";
                     return `
                         <article class="group-card">
                             <header class="group-head">
                                 <p class="group-name">${escapeHtml(group.guildName)}</p>
                                 <span class="pill">${group.totalPlayers}/5</span>
                             </header>
+                            <p class="group-subtext">${escapeHtml(statusLabel)}</p>
+                            ${fallbackNote}
                             <div class="group-progress">
                                 <div class="group-progress-fill" style="width:${fillPercent}%"></div>
                             </div>
@@ -407,6 +446,14 @@ async function handleClearHistory() {
     await loadDashboard();
 }
 
+async function handleClearLogs() {
+    const result = await postJson("/api/admin/logs/clear", { confirm: true });
+    setAdminStatus(
+        `Runtime logs cleared. Removed ${result.removed_lines ?? 0} lines `
+        + `(${result.removed_bytes ?? 0} bytes).`
+    );
+}
+
 async function handleAddFakePlayer(event) {
     event.preventDefault();
     const guildId = selectedGuildOrThrow();
@@ -480,6 +527,22 @@ elements.clearHistoryBtn?.addEventListener("click", () =>
             await handleClearHistory();
         } catch (error) {
             setAdminStatus(`Clear history failed: ${error.message}`, true);
+        }
+    })
+);
+elements.clearLogsBtn?.addEventListener("click", () =>
+    withAction(elements.clearLogsBtn, async () => {
+        const confirmed = window.confirm(
+            "This will clear runtime event logs used for debugging (logs/events.jsonl). Continue?"
+        );
+        if (!confirmed) {
+            setAdminStatus("Clear logs cancelled.");
+            return;
+        }
+        try {
+            await handleClearLogs();
+        } catch (error) {
+            setAdminStatus(`Clear logs failed: ${error.message}`, true);
         }
     })
 );

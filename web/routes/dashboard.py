@@ -15,6 +15,8 @@ from models.guild_settings import get_all_configured_guilds
 from models.queue import queue_manager
 from models.stats import get_all_time_stats, get_weekly_stats
 from services.matchmaking import get_entry_player_count
+from event_logger import clear_event_log, log_event
+from views.party import ACTIVE_DM_CONFIRMATIONS
 from web.routes.auth import require_dashboard_auth
 
 router = APIRouter(dependencies=[Depends(require_dashboard_auth)])
@@ -50,6 +52,10 @@ class FakeCleanupRequest(BaseModel):
 
 
 class ClearHistoryRequest(BaseModel):
+    confirm: bool = False
+
+
+class ClearLogsRequest(BaseModel):
     confirm: bool = False
 
 
@@ -113,6 +119,55 @@ def _active_matches(guild_id: int) -> List[Dict[str, Any]]:
     return result
 
 
+def _pending_confirmations(guild_id: int) -> List[Dict[str, Any]]:
+    """
+    Build groups currently waiting for unanimous confirmation.
+    """
+    result: List[Dict[str, Any]] = []
+
+    for session in ACTIVE_DM_CONFIRMATIONS.values():
+        if session.guild_id != guild_id:
+            continue
+        if session.cancelled or session.completed:
+            continue
+
+        users_still = session.users_still_in_queue()
+        if len(users_still) < 2:
+            continue
+
+        entries: List[Dict[str, Any]] = []
+        total_players = 0
+        for user_id in users_still:
+            entry = queue_manager.get(guild_id, user_id)
+            if not entry:
+                continue
+            entries.append(_serialize_entry({"user_id": user_id, **entry}))
+            total_players += get_entry_player_count(entry)
+
+        if len(entries) < 2:
+            continue
+
+        confirmed_targets = sum(1 for uid in users_still if uid in session.confirmed_ids)
+        fallback_targets = sum(
+            1 for uid in users_still if uid in getattr(session, "channel_fallback_user_ids", set())
+        )
+
+        result.append(
+            {
+                "phase": "awaiting_confirmation",
+                "user_ids": users_still,
+                "total_players": total_players,
+                "confirmation_targets_total": len(users_still),
+                "confirmation_targets_confirmed": confirmed_targets,
+                "confirmation_targets_pending": len(users_still) - confirmed_targets,
+                "channel_fallback_count": fallback_targets,
+                "entries": entries,
+            }
+        )
+
+    return result
+
+
 @router.get("/api/guilds")
 def get_guilds() -> List[Dict[str, Any]]:
     """
@@ -144,6 +199,7 @@ def get_queue_status() -> Dict[str, Any]:
                 "count": queue_count,
                 "entries": [_serialize_entry(entry) for entry in entries],
                 "active_matches": _active_matches(guild_id),
+                "pending_confirmations": _pending_confirmations(guild_id),
             }
         )
 
@@ -164,6 +220,7 @@ def get_queue_by_guild(guild_id: int) -> Dict[str, Any]:
         "count": len(entries),
         "entries": [_serialize_entry(entry) for entry in entries],
         "active_matches": _active_matches(guild_id),
+        "pending_confirmations": _pending_confirmations(guild_id),
     }
 
 
@@ -220,6 +277,12 @@ def clear_queue(payload: QueueClearRequest) -> Dict[str, Any]:
     if payload.guild_id is not None:
         removed = queue_manager.count(payload.guild_id)
         queue_manager.clear(payload.guild_id)
+        log_event(
+            "dashboard_admin_clear_queue",
+            scope="guild",
+            guild_id=payload.guild_id,
+            removed_entries=removed,
+        )
         return {
             "scope": "guild",
             "guild_id": payload.guild_id,
@@ -228,6 +291,11 @@ def clear_queue(payload: QueueClearRequest) -> Dict[str, Any]:
 
     removed = queue_manager.total_count()
     queue_manager.clear_all()
+    log_event(
+        "dashboard_admin_clear_queue",
+        scope="all",
+        removed_entries=removed,
+    )
     return {"scope": "all", "removed_entries": removed}
 
 
@@ -250,6 +318,15 @@ def add_fake_player(payload: FakePlayerRequest) -> Dict[str, Any]:
         payload.key_min,
         payload.key_max,
         role=role,
+    )
+    log_event(
+        "dashboard_dev_add_fake_player",
+        guild_id=payload.guild_id,
+        fake_user_id=fake_user_id,
+        username=payload.username.strip(),
+        role=role,
+        key_min=payload.key_min,
+        key_max=payload.key_max,
     )
     return {
         "ok": True,
@@ -283,6 +360,15 @@ def add_fake_group(payload: FakeGroupRequest) -> Dict[str, Any]:
         payload.key_min,
         payload.key_max,
         composition=composition,
+    )
+    log_event(
+        "dashboard_dev_add_fake_group",
+        guild_id=payload.guild_id,
+        fake_user_id=fake_user_id,
+        leader_name=payload.leader_name.strip(),
+        composition=composition,
+        key_min=payload.key_min,
+        key_max=payload.key_max,
     )
     return {
         "ok": True,
@@ -318,6 +404,14 @@ def cleanup_fake_players(payload: FakeCleanupRequest) -> Dict[str, Any]:
             if queue_manager.remove(guild_id, user_id):
                 removed += 1
 
+    log_event(
+        "dashboard_dev_cleanup_fake_players",
+        scope="guild" if payload.guild_id is not None else "all",
+        guild_id=payload.guild_id,
+        removed_entries=removed,
+        touched_guilds=touched_guilds,
+    )
+
     return {
         "scope": "guild" if payload.guild_id is not None else "all",
         "guild_id": payload.guild_id,
@@ -350,6 +444,11 @@ def clear_history_data(payload: ClearHistoryRequest) -> Dict[str, Any]:
     cursor.execute("DELETE FROM key_participants")
     cursor.execute("DELETE FROM completed_keys")
     conn.commit()
+    log_event(
+        "dashboard_admin_clear_history",
+        deleted_completed_keys=completed_keys_count,
+        deleted_key_participants=key_participants_count,
+    )
 
     return {
         "ok": True,
@@ -362,4 +461,32 @@ def clear_history_data(payload: ClearHistoryRequest) -> Dict[str, Any]:
             "queue_entries": True,
         },
     }
+
+
+@router.post("/api/admin/logs/clear")
+def clear_runtime_logs(payload: ClearLogsRequest) -> Dict[str, Any]:
+    """
+    Clear runtime event log file (logs/events.jsonl).
+    """
+    if not payload.confirm:
+        raise HTTPException(
+            status_code=400,
+            detail="Confirmation required. Send {\"confirm\": true}.",
+        )
+
+    result = clear_event_log()
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to clear logs: {result.get('error', 'unknown error')}",
+        )
+
+    # Record this action after truncation so the fresh file has an audit entry.
+    log_event(
+        "dashboard_admin_clear_logs",
+        removed_lines=result.get("removed_lines", 0),
+        removed_bytes=result.get("removed_bytes", 0),
+    )
+    result["logged_action"] = True
+    return result
 

@@ -25,11 +25,31 @@ app.mount(
 )
 
 
+def _asset_version() -> str:
+    """
+    Build a cache-busting version from static asset mtimes.
+    """
+    static_dir = Path(__file__).parent / "static"
+    assets = [
+        static_dir / "js" / "dashboard.js",
+        static_dir / "css" / "dashboard.css",
+    ]
+    existing = [asset for asset in assets if asset.exists()]
+    if not existing:
+        return "1"
+    latest_mtime = max(int(asset.stat().st_mtime) for asset in existing)
+    return str(latest_mtime)
+
+
 @app.get("/", response_class=HTMLResponse, dependencies=[Depends(require_dashboard_auth)])
 def dashboard_index() -> str:
     """
     Serve the dashboard page.
     """
     template_path = Path(__file__).parent / "templates" / "index.html"
-    return template_path.read_text(encoding="utf-8")
+    html = template_path.read_text(encoding="utf-8")
+    version = _asset_version()
+    html = html.replace("/static/css/dashboard.css", f"/static/css/dashboard.css?v={version}")
+    html = html.replace("/static/js/dashboard.js", f"/static/js/dashboard.js?v={version}")
+    return html
 

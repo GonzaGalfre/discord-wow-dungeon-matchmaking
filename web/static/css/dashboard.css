@@ -532,6 +532,12 @@ body::before {
     font-weight: 600;
 }
 
+.group-subtext {
+    margin: 0 0 0.48rem;
+    font-size: 0.76rem;
+    color: rgba(198, 212, 235, 0.78);
+}
+
 .group-progress {
     height: 8px;
     border-radius: 999px;

@@ -14,6 +14,7 @@ from models.queue import queue_manager
 from models.guild_settings import get_match_channel_id
 from services.matchmaking import get_users_with_overlap
 from services.embeds import build_match_embed
+from event_logger import log_event
 from services.queue_status import refresh_lfg_setup_message
 from views.role_selection import delete_old_match_messages
 
@@ -146,6 +147,15 @@ class GroupKeyRangeMaxSelectView(discord.ui.View):
                     content=mentions,
                     embed=embed,
                     view=PartyCompleteView(guild_id, matched_user_ids),
+                )
+                log_event(
+                    "match_message_created",
+                    guild_id=guild_id,
+                    channel_id=match_channel.id,
+                    message_id=match_message.id,
+                    matched_user_ids=matched_user_ids,
+                    triggered_by_user_id=user_id,
+                    source="group_queue",
                 )
                 
                 # Store the message reference for ALL matched users (including new group)

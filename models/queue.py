@@ -10,6 +10,8 @@ Multi-guild support: Each guild has its own separate queue.
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
+from event_logger import log_event
+
 
 class QueueManager:
     """
@@ -91,6 +93,17 @@ class QueueManager:
             "match_message_id": None,
             "match_channel_id": None,
         }
+        log_event(
+            "queue_entry_added_or_updated",
+            guild_id=guild_id,
+            user_id=user_id,
+            username=username,
+            role=role,
+            composition=composition,
+            key_min=key_min,
+            key_max=key_max,
+            queue_size_after=len(queue),
+        )
     
     def remove(self, guild_id: int, user_id: int) -> bool:
         """
@@ -104,7 +117,15 @@ class QueueManager:
             True if the user was removed, False if they weren't in the queue
         """
         queue = self._get_guild_queue(guild_id)
-        return queue.pop(user_id, None) is not None
+        removed = queue.pop(user_id, None) is not None
+        log_event(
+            "queue_entry_removed",
+            guild_id=guild_id,
+            user_id=user_id,
+            removed=removed,
+            queue_size_after=len(queue),
+        )
+        return removed
     
     def get(self, guild_id: int, user_id: int) -> Optional[dict]:
         """
@@ -143,6 +164,13 @@ class QueueManager:
         if user_id in queue:
             queue[user_id]["match_message_id"] = message_id
             queue[user_id]["match_channel_id"] = channel_id
+            log_event(
+                "match_message_linked_to_entry",
+                guild_id=guild_id,
+                user_id=user_id,
+                message_id=message_id,
+                channel_id=channel_id,
+            )
     
     def get_match_message(self, guild_id: int, user_id: int) -> Optional[Tuple[int, int]]:
         """
@@ -173,8 +201,15 @@ class QueueManager:
         """
         queue = self._get_guild_queue(guild_id)
         if user_id in queue:
+            had_match_message = queue[user_id].get("match_message_id")
             queue[user_id]["match_message_id"] = None
             queue[user_id]["match_channel_id"] = None
+            log_event(
+                "match_message_unlinked_from_entry",
+                guild_id=guild_id,
+                user_id=user_id,
+                had_match_message=had_match_message is not None,
+            )
     
     def contains(self, guild_id: int, user_id: int) -> bool:
         """
@@ -234,11 +269,22 @@ class QueueManager:
             guild_id: Discord guild ID
         """
         if guild_id in self._queues:
+            removed_entries = len(self._queues[guild_id])
             self._queues[guild_id].clear()
+            log_event(
+                "queue_cleared_for_guild",
+                guild_id=guild_id,
+                removed_entries=removed_entries,
+            )
     
     def clear_all(self) -> None:
         """Remove all entries from all guild queues."""
+        removed_entries = self.total_count()
         self._queues.clear()
+        log_event(
+            "queue_cleared_all_guilds",
+            removed_entries=removed_entries,
+        )
     
     def items(self, guild_id: int):
         """

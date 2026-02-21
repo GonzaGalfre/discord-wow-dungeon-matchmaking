@@ -4,249 +4,394 @@ Party views for the WoW Mythic+ LFG Bot.
 This module contains views for party formation and confirmation.
 """
 
-from typing import List
+import asyncio
+from typing import Dict, List, Tuple
 
 import discord
 
 from models.queue import queue_manager
 from models.stats import record_completed_key
 from services.matchmaking import is_group_entry, calculate_common_range
-from services.embeds import build_match_embed, build_confirmation_embed, format_entry_composition
+from services.embeds import build_match_embed, format_entry_composition
+from event_logger import log_event
 from services.queue_status import refresh_lfg_setup_message
 
 
-class ConfirmationView(discord.ui.View):
+ACTIVE_DM_CONFIRMATIONS: Dict[Tuple[int, Tuple[int, ...]], "GroupDMConfirmationSession"] = {}
+
+
+class GroupDMConfirmationSession:
     """
-    View for confirming group formation.
-    
-    Each player/leader must click 'Confirm' or 'Reject'.
-    - For groups: only the leader can confirm/reject for the whole group
-    - If everyone confirms: group formed, all removed from queue
-    - If someone rejects: that entry (solo or group) is removed, others keep searching
-    
-    TESTING: Fake players (ID > 900000000000000000) auto-confirm immediately.
+    Tracks an active DM confirmation round for a potential group.
+
+    Each matched player/leader receives a private message with Yes/No buttons.
+    The group is formed only if everyone still in queue confirms.
     """
-    
-    def __init__(self, guild_id: int, matched_user_ids: List[int], original_embed: discord.Embed):
-        super().__init__(timeout=None)
+
+    def __init__(
+        self,
+        client: discord.Client,
+        guild_id: int,
+        channel_id: int,
+        matched_user_ids: List[int],
+    ):
+        self.client = client
         self.guild_id = guild_id
+        self.channel_id = channel_id
         self.matched_user_ids = matched_user_ids
-        self.original_embed = original_embed  # Keep original embed in case we need to revert
-        self.confirmed_ids: set = set()  # IDs of users who confirmed
-        
+        self.confirmed_ids: set[int] = set()
+        self.failed_dm_user_ids: set[int] = set()
+        self.channel_fallback_user_ids: set[int] = set()
+        self.cancelled = False
+        self.completed = False
+        self._lock = asyncio.Lock()
+
         # Auto-confirm fake players (for testing)
         for user_id in matched_user_ids:
             if user_id > 900000000000000000:  # Fake player
                 self.confirmed_ids.add(user_id)
     
-    @discord.ui.button(
-        label="Confirmar",
-        style=discord.ButtonStyle.success,
-        emoji="✅",
-    )
-    async def confirm_button(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
-        """Handle Confirm button click."""
-        user_id = interaction.user.id
-        
-        # Verify the clicker is part of the match (solo player or group leader)
-        if user_id not in self.matched_user_ids:
-            await interaction.response.send_message(
-                "⚠️ Solo los jugadores o líderes de grupo pueden confirmar.",
-                ephemeral=True,
-            )
-            return
-        
-        # Verify user is still in queue
-        if not queue_manager.contains(self.guild_id, user_id):
-            await interaction.response.send_message(
-                "⚠️ Ya no estás en la cola.",
-                ephemeral=True,
-            )
-            return
-        
-        # Check if already confirmed
-        if user_id in self.confirmed_ids:
-            entry = queue_manager.get(self.guild_id, user_id)
-            if entry and is_group_entry(entry):
-                await interaction.response.send_message(
-                    "ℹ️ Ya has confirmado por tu grupo. Esperando a los demás...",
-                    ephemeral=True,
-                )
-            else:
-                await interaction.response.send_message(
-                    "ℹ️ Ya has confirmado. Esperando a los demás...",
-                    ephemeral=True,
-                )
-            return
-        
-        # Add to confirmed
-        self.confirmed_ids.add(user_id)
-        
-        # Check how many are still in queue and how many confirmed
-        users_still_in_queue = [uid for uid in self.matched_user_ids if queue_manager.contains(self.guild_id, uid)]
-        all_confirmed = all(uid in self.confirmed_ids for uid in users_still_in_queue)
-        
-        if all_confirmed and len(users_still_in_queue) >= 2:
-            # Everyone confirmed! Group formed
-            
-            # Collect participant data before removing from queue
-            participants = []
-            removed_entries = []
-            
-            for uid in users_still_in_queue:
-                entry = queue_manager.get(self.guild_id, uid)
-                if entry:
-                    participants.append({
-                        "user_id": uid,
-                        "username": entry["username"],
-                        "role": entry.get("role"),
-                        "composition": entry.get("composition"),
-                        "key_min": entry["key_min"],
-                        "key_max": entry["key_max"],
-                    })
-                    
-                    if is_group_entry(entry):
-                        removed_entries.append(f"<@{uid}> (grupo)")
-                    else:
-                        removed_entries.append(f"<@{uid}>")
-                
-                queue_manager.remove(self.guild_id, uid)
+    @property
+    def key(self) -> Tuple[int, Tuple[int, ...]]:
+        return self.guild_id, tuple(sorted(self.matched_user_ids))
 
-            await refresh_lfg_setup_message(interaction.client, self.guild_id, interaction.channel)
-            
-            # Calculate the key level (use the common range minimum)
-            common_range = calculate_common_range(participants)
-            key_level = common_range[0]  # Use minimum of common range
-            
-            # Record the completed key in the database (with guild_id)
+    def users_still_in_queue(self) -> List[int]:
+        return [uid for uid in self.matched_user_ids if queue_manager.contains(self.guild_id, uid)]
+
+    def all_confirmed(self) -> bool:
+        users_still = self.users_still_in_queue()
+        return len(users_still) >= 2 and all(uid in self.confirmed_ids for uid in users_still)
+
+    async def notify_channel(self, content: str) -> None:
+        channel = self.client.get_channel(self.channel_id)
+        if channel is None:
             try:
-                record_completed_key(key_level, participants, guild_id=self.guild_id)
-            except Exception as e:
-                print(f"⚠️ Error recording completed key: {e}")
-            
-            await interaction.response.send_message(
-                f"🎉 **¡Grupo formado!**\n\n"
-                f"El grupo se ha formado por {', '.join(removed_entries)} "
-                f"y serán eliminados de la cola.\n\n"
-                f"📊 *Llave +{key_level} registrada en las estadísticas.*\n\n"
-                f"¡Buena suerte en la mazmorra! 🗝️",
-                ephemeral=False,
+                channel = await self.client.fetch_channel(self.channel_id)
+            except (discord.errors.NotFound, discord.errors.Forbidden, discord.errors.HTTPException):
+                return
+        try:
+            await channel.send(content)
+        except (discord.errors.Forbidden, discord.errors.HTTPException):
+            pass
+
+    async def finalize_group(self) -> None:
+        users_still = self.users_still_in_queue()
+        if len(users_still) < 2:
+            log_event(
+                "group_finalize_aborted_not_enough_players",
+                guild_id=self.guild_id,
+                channel_id=self.channel_id,
+                users_still_in_queue=users_still,
             )
-            
-            # Delete confirmation message
+            self.completed = True
+            ACTIVE_DM_CONFIRMATIONS.pop(self.key, None)
+            return
+
+        participants = []
+        removed_entries = []
+
+        for uid in users_still:
+            entry = queue_manager.get(self.guild_id, uid)
+            if not entry:
+                continue
+
+            participants.append(
+                {
+                    "user_id": uid,
+                    "username": entry["username"],
+                    "role": entry.get("role"),
+                    "composition": entry.get("composition"),
+                    "key_min": entry["key_min"],
+                    "key_max": entry["key_max"],
+                }
+            )
+
+            if uid > 900000000000000000:
+                removed_entries.append(f"`{entry['username']}`")
+            elif is_group_entry(entry):
+                removed_entries.append(f"<@{uid}> (grupo)")
+            else:
+                removed_entries.append(f"<@{uid}>")
+
+            queue_manager.remove(self.guild_id, uid)
+
+        channel = self.client.get_channel(self.channel_id)
+        if channel is None:
             try:
-                await interaction.message.delete()
-            except (discord.errors.NotFound, discord.errors.Forbidden):
-                pass
-        else:
-            # Update embed to show new status
-            embed = build_confirmation_embed(self.guild_id, self.matched_user_ids, self.confirmed_ids)
-            await interaction.response.edit_message(embed=embed, view=self)
-    
-    @discord.ui.button(
-        label="Rechazar",
-        style=discord.ButtonStyle.danger,
-        emoji="❌",
-    )
-    async def reject_button(
+                channel = await self.client.fetch_channel(self.channel_id)
+            except (discord.errors.NotFound, discord.errors.Forbidden, discord.errors.HTTPException):
+                channel = None
+
+        if channel is not None:
+            await refresh_lfg_setup_message(self.client, self.guild_id, channel)
+
+        common_range = calculate_common_range(participants)
+        key_level = common_range[0]
+        log_event(
+            "group_finalized",
+            guild_id=self.guild_id,
+            channel_id=self.channel_id,
+            matched_user_ids=self.matched_user_ids,
+            finalized_user_ids=users_still,
+            key_level=key_level,
+            participants=participants,
+        )
+
+        try:
+            record_completed_key(key_level, participants, guild_id=self.guild_id)
+        except Exception as e:
+            print(f"⚠️ Error recording completed key: {e}")
+
+        await self.notify_channel(
+            f"🎉 **¡Grupo formado!**\n\n"
+            f"El grupo se ha formado con {', '.join(removed_entries)} "
+            f"y han sido eliminados de la cola.\n\n"
+            f"📊 *Llave +{key_level} registrada en las estadísticas.*\n\n"
+            f"¡Buena suerte en la mazmorra! 🗝️"
+        )
+
+        self.completed = True
+        ACTIVE_DM_CONFIRMATIONS.pop(self.key, None)
+
+
+class DMConfirmationView(discord.ui.View):
+    """Private DM confirmation buttons for one matched user/leader."""
+
+    def __init__(self, session: GroupDMConfirmationSession, allowed_user_id: int):
+        super().__init__(timeout=1800)  # 30 minutes
+        self.session = session
+        self.allowed_user_id = allowed_user_id
+
+    @discord.ui.button(label="Sí, confirmar", style=discord.ButtonStyle.success, emoji="✅")
+    async def confirm_dm_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
-        """Handle Reject button click."""
         user_id = interaction.user.id
-        
-        # Verify the clicker is part of the match (solo player or group leader)
-        if user_id not in self.matched_user_ids:
+
+        if user_id != self.allowed_user_id:
             await interaction.response.send_message(
-                "⚠️ Solo los jugadores o líderes de grupo pueden rechazar.",
+                "⚠️ Este mensaje privado no te pertenece.",
                 ephemeral=True,
             )
             return
-        
-        # Check if it was a group
-        entry = queue_manager.get(self.guild_id, user_id)
-        was_group = entry and is_group_entry(entry)
-        
-        # Remove user/group from queue
-        was_in_queue = queue_manager.remove(self.guild_id, user_id)
-        if was_in_queue:
-            await refresh_lfg_setup_message(interaction.client, self.guild_id, interaction.channel)
-        
-        if was_in_queue:
-            if was_group:
+
+        async with self.session._lock:
+            if self.session.cancelled:
                 await interaction.response.send_message(
-                    "✅ Has rechazado y tu grupo ha salido de la cola. ¡Hasta la próxima!",
+                    "ℹ️ Esta confirmación ya fue cancelada.",
                     ephemeral=True,
                 )
-            else:
+                return
+
+            if self.session.completed:
                 await interaction.response.send_message(
-                    "✅ Has rechazado y salido de la cola. ¡Hasta la próxima!",
+                    "ℹ️ El grupo ya fue confirmado y cerrado.",
                     ephemeral=True,
                 )
-        else:
+                return
+
+            if not queue_manager.contains(self.session.guild_id, user_id):
+                await interaction.response.send_message(
+                    "⚠️ Ya no estás en la cola.",
+                    ephemeral=True,
+                )
+                return
+
+            if user_id in self.session.confirmed_ids:
+                await interaction.response.send_message(
+                    "ℹ️ Ya habías confirmado. Esperando a los demás...",
+                    ephemeral=True,
+                )
+                return
+
+            self.session.confirmed_ids.add(user_id)
+            everyone_confirmed = self.session.all_confirmed()
+            log_event(
+                "group_confirmation_yes_dm",
+                guild_id=self.session.guild_id,
+                user_id=user_id,
+                confirmed_count=len(self.session.confirmed_ids),
+                pending_user_ids=[
+                    uid
+                    for uid in self.session.users_still_in_queue()
+                    if uid not in self.session.confirmed_ids
+                ],
+            )
+
+        await interaction.response.send_message(
+            "✅ Confirmación recibida. Te avisaremos cuando todos confirmen.",
+            ephemeral=True,
+        )
+
+        if everyone_confirmed:
+            await self.session.finalize_group()
+
+    @discord.ui.button(label="No", style=discord.ButtonStyle.danger, emoji="❌")
+    async def reject_dm_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        user_id = interaction.user.id
+
+        if user_id != self.allowed_user_id:
             await interaction.response.send_message(
-                "ℹ️ Ya no estabas en la cola.",
+                "⚠️ Este mensaje privado no te pertenece.",
                 ephemeral=True,
             )
-        
-        # Check if enough players remain
-        users_still_in_queue = [uid for uid in self.matched_user_ids if queue_manager.contains(self.guild_id, uid)]
-        
-        # Notify via DM those who had confirmed (without revealing who rejected)
-        for uid in self.confirmed_ids:
-            if uid != user_id:  # Don't send to the one who rejected
-                try:
-                    user = await interaction.client.fetch_user(uid)
-                    await user.send(
-                        "😔 **Alguien ha rechazado la confirmación de grupo.**\n\n"
-                        "Sigues en la cola esperando más jugadores. "
-                        "¡No te preocupes, pronto encontrarás otro grupo!"
-                    )
-                except (discord.errors.Forbidden, discord.errors.HTTPException):
-                    # User has DMs disabled or there was an error
-                    pass
-        
-        if len(users_still_in_queue) < 2:
-            # Not enough players remain, clear their match_message_id so they can find new matches
-            for uid in users_still_in_queue:
-                queue_manager.clear_match_message(self.guild_id, uid)
-            
-            # Delete message
-            try:
-                await interaction.message.delete()
-            except (discord.errors.NotFound, discord.errors.Forbidden):
-                pass
-        else:
-            # Delete current confirmation message
-            try:
-                await interaction.message.delete()
-            except (discord.errors.NotFound, discord.errors.Forbidden):
-                pass
-            
-            self.confirmed_ids.discard(user_id)
-            
-            # Rebuild original embed with remaining users
-            users_data = [{"user_id": uid, **queue_manager.get(self.guild_id, uid)} for uid in users_still_in_queue]
-            new_embed = build_match_embed(users_data)
-            
-            # Create new view
-            new_view = PartyCompleteView(self.guild_id, users_still_in_queue)
-            
-            # Mention everyone remaining (new message = notification)
-            mentions = " ".join(f"<@{uid}>" for uid in users_still_in_queue)
-            
-            channel = interaction.channel
-            if channel:
-                match_message = await channel.send(
-                    content=mentions,  # Just ping, don't say who rejected
-                    embed=new_embed,
-                    view=new_view,
+            return
+
+        async with self.session._lock:
+            if self.session.cancelled:
+                await interaction.response.send_message(
+                    "ℹ️ Esta confirmación ya fue cancelada.",
+                    ephemeral=True,
                 )
-                
-                # Store the message reference for remaining users
-                for uid in users_still_in_queue:
-                    queue_manager.set_match_message(self.guild_id, uid, match_message.id, channel.id)
+                return
+
+            if self.session.completed:
+                await interaction.response.send_message(
+                    "ℹ️ El grupo ya fue confirmado y cerrado.",
+                    ephemeral=True,
+                )
+                return
+
+            self.session.cancelled = True
+            ACTIVE_DM_CONFIRMATIONS.pop(self.session.key, None)
+            log_event(
+                "group_confirmation_cancelled_dm_no",
+                guild_id=self.session.guild_id,
+                user_id=user_id,
+                matched_user_ids=self.session.matched_user_ids,
+            )
+
+        await interaction.response.send_message(
+            "✅ Confirmación cancelada. Sigues en cola.",
+            ephemeral=True,
+        )
+        await self.session.notify_channel(
+            "❌ **Se canceló la confirmación del grupo en privado.**\n"
+            "Al menos un jugador pulsó *No*. El grupo sigue en cola."
+        )
+
+
+class ChannelFallbackConfirmationView(discord.ui.View):
+    """Channel fallback confirmation for users who cannot receive DMs."""
+
+    def __init__(self, session: GroupDMConfirmationSession):
+        super().__init__(timeout=1800)  # 30 minutes
+        self.session = session
+
+    def _is_fallback_user(self, user_id: int) -> bool:
+        return user_id in self.session.channel_fallback_user_ids
+
+    @discord.ui.button(label="Confirmar aquí", style=discord.ButtonStyle.success, emoji="✅")
+    async def confirm_channel_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        user_id = interaction.user.id
+
+        if not self._is_fallback_user(user_id):
+            await interaction.response.send_message(
+                "⚠️ Este botón es solo para quienes no pudieron recibir DM.",
+                ephemeral=True,
+            )
+            return
+
+        async with self.session._lock:
+            if self.session.cancelled:
+                await interaction.response.send_message(
+                    "ℹ️ Esta confirmación ya fue cancelada.",
+                    ephemeral=True,
+                )
+                return
+
+            if self.session.completed:
+                await interaction.response.send_message(
+                    "ℹ️ El grupo ya fue confirmado y cerrado.",
+                    ephemeral=True,
+                )
+                return
+
+            if not queue_manager.contains(self.session.guild_id, user_id):
+                await interaction.response.send_message(
+                    "⚠️ Ya no estás en la cola.",
+                    ephemeral=True,
+                )
+                return
+
+            if user_id in self.session.confirmed_ids:
+                await interaction.response.send_message(
+                    "ℹ️ Ya habías confirmado. Esperando a los demás...",
+                    ephemeral=True,
+                )
+                return
+
+            self.session.confirmed_ids.add(user_id)
+            everyone_confirmed = self.session.all_confirmed()
+            log_event(
+                "group_confirmation_yes_channel_fallback",
+                guild_id=self.session.guild_id,
+                user_id=user_id,
+                confirmed_count=len(self.session.confirmed_ids),
+                pending_user_ids=[
+                    uid
+                    for uid in self.session.users_still_in_queue()
+                    if uid not in self.session.confirmed_ids
+                ],
+            )
+
+        await interaction.response.send_message(
+            "✅ Confirmación recibida desde el canal.",
+            ephemeral=True,
+        )
+
+        if everyone_confirmed:
+            await self.session.finalize_group()
+
+    @discord.ui.button(label="No (cancelar)", style=discord.ButtonStyle.danger, emoji="❌")
+    async def reject_channel_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        user_id = interaction.user.id
+
+        if not self._is_fallback_user(user_id):
+            await interaction.response.send_message(
+                "⚠️ Este botón es solo para quienes no pudieron recibir DM.",
+                ephemeral=True,
+            )
+            return
+
+        async with self.session._lock:
+            if self.session.cancelled:
+                await interaction.response.send_message(
+                    "ℹ️ Esta confirmación ya fue cancelada.",
+                    ephemeral=True,
+                )
+                return
+
+            if self.session.completed:
+                await interaction.response.send_message(
+                    "ℹ️ El grupo ya fue confirmado y cerrado.",
+                    ephemeral=True,
+                )
+                return
+
+            self.session.cancelled = True
+            ACTIVE_DM_CONFIRMATIONS.pop(self.session.key, None)
+            log_event(
+                "group_confirmation_cancelled_channel_fallback_no",
+                guild_id=self.session.guild_id,
+                user_id=user_id,
+                matched_user_ids=self.session.matched_user_ids,
+            )
+
+        await interaction.response.send_message(
+            "✅ Confirmación cancelada. Sigues en cola.",
+            ephemeral=True,
+        )
+        await self.session.notify_channel(
+            "❌ **Se canceló la confirmación del grupo.**\n"
+            "Un jugador del fallback en canal pulsó *No*. El grupo sigue en cola."
+        )
 
 
 class PartyCompleteView(discord.ui.View):
@@ -309,104 +454,117 @@ class PartyCompleteView(discord.ui.View):
                 ephemeral=True,
             )
             return
-        
-        # Save current embed
-        original_embed = interaction.message.embeds[0] if interaction.message.embeds else None
-        
-        # Create confirmation view
-        confirmation_view = ConfirmationView(self.guild_id, users_still_in_queue, original_embed)
-        
-        # User who initiated is automatically confirming
-        confirmation_view.confirmed_ids.add(user_id)
-        
-        # Check if all players are now confirmed (happens when only fake players remain)
-        all_confirmed = all(uid in confirmation_view.confirmed_ids for uid in users_still_in_queue)
-        
-        if all_confirmed and len(users_still_in_queue) >= 2:
-            # Everyone is confirmed (all fake players + clicking user)! Auto-complete group
-            # Defer first
-            await interaction.response.defer()
-            
-            # Collect participant data before removing from queue
-            participants = []
-            for uid in users_still_in_queue:
-                entry = queue_manager.get(self.guild_id, uid)
-                if entry:
-                    participants.append({
-                        "user_id": uid,
-                        "username": entry["username"],
-                        "role": entry.get("role"),
-                        "composition": entry.get("composition"),
-                        "key_min": entry["key_min"],
-                        "key_max": entry["key_max"],
-                    })
-                queue_manager.remove(self.guild_id, uid)
 
-            await refresh_lfg_setup_message(interaction.client, self.guild_id, interaction.channel)
-            
-            # Calculate the key level
-            from services.matchmaking import calculate_common_range
-            common_range = calculate_common_range(participants)
-            key_level = common_range[0]
-            
-            # Record the completed key
-            from models.stats import record_completed_key
-            try:
-                record_completed_key(key_level, participants, guild_id=self.guild_id)
-            except Exception as e:
-                print(f"⚠️ Error recording completed key: {e}")
-            
-            # Delete previous match message
-            try:
-                await interaction.message.delete()
-            except (discord.errors.NotFound, discord.errors.Forbidden):
-                pass
-            
-            # Send completion message
-            channel = interaction.channel
-            if channel:
-                removed_entries = []
-                for uid in users_still_in_queue:
-                    if uid > 900000000000000000:  # Fake player
-                        entry_data = next((p for p in participants if p["user_id"] == uid), None)
-                        if entry_data:
-                            removed_entries.append(f"`{entry_data['username']}`")
-                    else:
-                        removed_entries.append(f"<@{uid}>")
-                
-                await channel.send(
-                    f"🎉 **¡Grupo formado automáticamente!**\n\n"
-                    f"El grupo se ha formado con {', '.join(removed_entries)} "
-                    f"y han sido eliminados de la cola.\n\n"
-                    f"📊 *Llave +{key_level} registrada en las estadísticas.*\n\n"
-                    f"💡 *Todos los jugadores falsos confirmaron automáticamente.*\n\n"
-                    f"¡Buena suerte en la mazmorra! 🗝️",
-                )
-            return
-        
-        # Not all confirmed yet, create confirmation embed
-        embed = build_confirmation_embed(self.guild_id, users_still_in_queue, confirmation_view.confirmed_ids)
-        
-        # Mention EVERYONE so they get notified (new message = notification)
-        mentions = " ".join(f"<@{uid}>" for uid in users_still_in_queue)
-        
-        # Defer to avoid interaction timeout
-        await interaction.response.defer()
-        
-        # Delete previous match message
-        try:
-            await interaction.message.delete()
-        except (discord.errors.NotFound, discord.errors.Forbidden):
-            pass
-        
-        # Send NEW confirmation message (this DOES notify everyone)
-        channel = interaction.channel
-        if channel:
-            await channel.send(
-                content=f"🔔 {mentions} — ¡Confirmen para formar el grupo!",
-                embed=embed,
-                view=confirmation_view,
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        key = (self.guild_id, tuple(sorted(users_still_in_queue)))
+        existing_session = ACTIVE_DM_CONFIRMATIONS.get(key)
+        if existing_session and not existing_session.cancelled and not existing_session.completed:
+            await interaction.followup.send(
+                "ℹ️ Ya hay una confirmación privada en curso para este grupo.",
+                ephemeral=True,
             )
+            return
+
+        if not interaction.channel_id:
+            await interaction.followup.send(
+                "⚠️ No pude encontrar el canal para publicar el resultado final.",
+                ephemeral=True,
+            )
+            return
+
+        session = GroupDMConfirmationSession(
+            client=interaction.client,
+            guild_id=self.guild_id,
+            channel_id=interaction.channel_id,
+            matched_user_ids=users_still_in_queue,
+        )
+        ACTIVE_DM_CONFIRMATIONS[key] = session
+        log_event(
+            "group_confirmation_session_started",
+            guild_id=self.guild_id,
+            channel_id=interaction.channel_id,
+            initiator_user_id=user_id,
+            matched_user_ids=users_still_in_queue,
+            auto_confirmed_fake_user_ids=[
+                uid for uid in session.confirmed_ids if uid > 900000000000000000
+            ],
+        )
+
+        dm_targets = [uid for uid in users_still_in_queue if uid <= 900000000000000000]
+        for uid in dm_targets:
+            if not queue_manager.contains(self.guild_id, uid):
+                continue
+
+            try:
+                user = await interaction.client.fetch_user(uid)
+                entry = queue_manager.get(self.guild_id, uid)
+                is_group = bool(entry and is_group_entry(entry))
+
+                embed = discord.Embed(
+                    title="Confirmación privada de grupo",
+                    description=(
+                        "¿Confirmas que tu entrada está lista para cerrar este grupo?\n\n"
+                        "✅ Si todos confirman, se cerrará el grupo y saldrán de cola.\n"
+                        "❌ Si alguien pulsa *No*, se cancela esta confirmación."
+                    ),
+                    color=discord.Color.blurple(),
+                )
+                if is_group:
+                    embed.add_field(
+                        name="Tu entrada",
+                        value=f"Líder de grupo ({format_entry_composition(entry)})",
+                        inline=False,
+                    )
+                else:
+                    role = entry.get("role", "desconocido") if entry else "desconocido"
+                    embed.add_field(name="Tu entrada", value=f"Jugador solo ({role})", inline=False)
+                embed.set_footer(text="Solo tú puedes responder este DM.")
+
+                await user.send(embed=embed, view=DMConfirmationView(session, uid))
+            except (discord.errors.Forbidden, discord.errors.HTTPException):
+                session.failed_dm_user_ids.add(uid)
+                log_event(
+                    "group_confirmation_dm_send_failed",
+                    guild_id=self.guild_id,
+                    channel_id=interaction.channel_id,
+                    user_id=uid,
+                )
+
+        if session.failed_dm_user_ids:
+            session.channel_fallback_user_ids = set(session.failed_dm_user_ids)
+            log_event(
+                "group_confirmation_channel_fallback_enabled",
+                guild_id=self.guild_id,
+                channel_id=interaction.channel_id,
+                fallback_user_ids=sorted(session.failed_dm_user_ids),
+            )
+            failed_mentions = " ".join(f"<@{uid}>" for uid in sorted(session.failed_dm_user_ids))
+            await interaction.followup.send(
+                "⚠️ Algunos jugadores tienen DMs cerrados. Ellos deberán confirmar en el canal.",
+                ephemeral=True,
+            )
+            if interaction.channel and failed_mentions:
+                await interaction.channel.send(
+                    content=(
+                        f"📢 {failed_mentions}\n"
+                        "No pude enviarles DM. Confirmen aquí para cerrar el grupo:"
+                    ),
+                    view=ChannelFallbackConfirmationView(session),
+                )
+
+        await session.notify_channel(
+            "📩 **Confirmación iniciada por privado.**\n"
+            "Revisen sus DMs y pulsen *Sí* para cerrar el grupo."
+        )
+
+        await interaction.followup.send(
+            "✅ Envié la confirmación por DM a todos los jugadores/líderes del match.",
+            ephemeral=True,
+        )
+
+        if session.all_confirmed():
+            await session.finalize_group()
     
     @discord.ui.button(
         label="Salir de Cola",
@@ -438,6 +596,13 @@ class PartyCompleteView(discord.ui.View):
         was_group = entry and is_group_entry(entry)
         
         was_in_queue = queue_manager.remove(self.guild_id, user_id)
+        log_event(
+            "match_leave_queue_button_clicked",
+            guild_id=self.guild_id,
+            user_id=user_id,
+            was_in_queue=was_in_queue,
+            matched_user_ids=self.matched_user_ids,
+        )
         if was_in_queue:
             await refresh_lfg_setup_message(interaction.client, self.guild_id, interaction.channel)
         

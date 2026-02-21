@@ -15,7 +15,7 @@ from views.group_selection import (
     GroupKeyRangeMinSelectView,
     GroupKeyRangeMaxSelectView,
 )
-from views.party import PartyCompleteView, ConfirmationView
+from views.party import PartyCompleteView
 
 __all__ = [
     # Join queue views
@@ -31,6 +31,5 @@ __all__ = [
     "GroupKeyRangeMaxSelectView",
     # Party views
     "PartyCompleteView",
-    "ConfirmationView",
 ]
 
