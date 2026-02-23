@@ -13,6 +13,7 @@ Discord.py Version: 2.0+
 
 from config.settings import DISCORD_TOKEN
 from bot import LFGBot
+from runtime import set_bot_client
 from web.server import start_dashboard_server
 
 
@@ -29,6 +30,7 @@ def main():
     start_dashboard_server()
 
     bot = LFGBot()
+    set_bot_client(bot)
     bot.run(DISCORD_TOKEN)
 
 

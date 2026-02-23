@@ -90,7 +90,7 @@ class JoinQueueView(discord.ui.View):
             await interaction.response.send_message(
                 "⚠️ **Ya estás en un grupo activo.**\n\n"
                 "Si quieres salir y unirte con diferentes preferencias:\n"
-                "• Haz clic en **'Salir de Cola'** en tu mensaje de emparejamiento, o\n"
+                "• Usa el botón **'Salir de Cola'** en tu mensaje de cola, o\n"
                 "• Usa el comando `/salir`",
                 ephemeral=True,
             )

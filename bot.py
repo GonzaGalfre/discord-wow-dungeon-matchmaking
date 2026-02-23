@@ -7,11 +7,14 @@ Multi-guild support: The bot can work with multiple Discord servers simultaneous
 Each guild has its own queue and channel configuration.
 """
 
+import asyncio
+
 import discord
 from discord.ext import commands
 
 from views.join_queue import JoinQueueView
 from models.guild_settings import get_all_configured_guilds
+from services.queue_presence import queue_presence_watchdog
 
 
 class LFGBot(commands.Bot):
@@ -31,6 +34,7 @@ class LFGBot(commands.Bot):
             command_prefix="!",
             intents=intents,
         )
+        self._queue_presence_task: asyncio.Task | None = None
     
     async def setup_hook(self):
         """
@@ -47,6 +51,8 @@ class LFGBot(commands.Bot):
         """
         # Register persistent views
         self.add_view(JoinQueueView())
+        if self._queue_presence_task is None:
+            self._queue_presence_task = asyncio.create_task(queue_presence_watchdog(self))
         
         # Load cogs
         try:

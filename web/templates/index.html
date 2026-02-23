@@ -89,11 +89,31 @@
                             <div class="range-grid">
                                 <label>
                                     <span>Min key</span>
-                                    <input id="fakePlayerMinKey" name="key_min" type="number" min="2" max="20" value="8" required>
+                                    <input id="fakePlayerMinKey" name="key_min" type="number" min="0" max="20" value="8" required>
                                 </label>
                                 <label>
                                     <span>Max key</span>
-                                    <input id="fakePlayerMaxKey" name="key_max" type="number" min="2" max="20" value="12" required>
+                                    <input id="fakePlayerMaxKey" name="key_max" type="number" min="0" max="20" value="12" required>
+                                </label>
+                            </div>
+                            <div class="triple-grid">
+                                <label>
+                                    <span>Has keystone</span>
+                                    <select id="fakePlayerHasKeystone" name="has_keystone">
+                                        <option value="false" selected>No</option>
+                                        <option value="true">Yes</option>
+                                    </select>
+                                </label>
+                                <label>
+                                    <span>Keystone level</span>
+                                    <input id="fakePlayerKeystoneLevel" name="keystone_level" type="number" min="2" max="20" value="10">
+                                </label>
+                                <label>
+                                    <span>Force match on add</span>
+                                    <select id="fakePlayerForceMatch" name="force_match">
+                                        <option value="true" selected>Yes</option>
+                                        <option value="false">No</option>
+                                    </select>
                                 </label>
                             </div>
                             <button type="submit" class="primary-button">Add fake player</button>
@@ -125,11 +145,11 @@
                             <div class="range-grid">
                                 <label>
                                     <span>Min key</span>
-                                    <input id="fakeGroupMinKey" name="key_min" type="number" min="2" max="20" value="8" required>
+                                    <input id="fakeGroupMinKey" name="key_min" type="number" min="0" max="20" value="8" required>
                                 </label>
                                 <label>
                                     <span>Max key</span>
-                                    <input id="fakeGroupMaxKey" name="key_max" type="number" min="2" max="20" value="12" required>
+                                    <input id="fakeGroupMaxKey" name="key_max" type="number" min="0" max="20" value="12" required>
                                 </label>
                             </div>
                             <button type="submit" class="primary-button">Add fake group</button>

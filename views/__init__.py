@@ -7,15 +7,19 @@ This module contains Discord UI components (Views, Buttons, Selects).
 from views.join_queue import JoinQueueView, QueueTypeSelectView
 from views.role_selection import (
     RoleSelectView,
-    KeyRangeMinSelectView,
-    KeyRangeMaxSelectView,
+    MultiRoleSelectView,
+    KeyBracketSelectView,
+    KeystoneChoiceView,
+    KeystoneLevelSelectView,
 )
 from views.group_selection import (
     GroupCompositionView,
-    GroupKeyRangeMinSelectView,
-    GroupKeyRangeMaxSelectView,
+    GroupKeyBracketSelectView,
+    GroupKeystoneChoiceView,
+    GroupKeystoneLevelSelectView,
 )
 from views.party import PartyCompleteView
+from views.queue_entry_actions import QueueEntryActionsView
 
 __all__ = [
     # Join queue views
@@ -23,13 +27,18 @@ __all__ = [
     "QueueTypeSelectView",
     # Role selection views (solo)
     "RoleSelectView",
-    "KeyRangeMinSelectView",
-    "KeyRangeMaxSelectView",
+    "MultiRoleSelectView",
+    "KeyBracketSelectView",
+    "KeystoneChoiceView",
+    "KeystoneLevelSelectView",
     # Group selection views
     "GroupCompositionView",
-    "GroupKeyRangeMinSelectView",
-    "GroupKeyRangeMaxSelectView",
+    "GroupKeyBracketSelectView",
+    "GroupKeystoneChoiceView",
+    "GroupKeystoneLevelSelectView",
     # Party views
     "PartyCompleteView",
+    # Queue action views
+    "QueueEntryActionsView",
 ]
 

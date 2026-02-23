@@ -47,6 +47,18 @@ ROLES = {
 MIN_KEY_LEVEL = 2
 MAX_KEY_LEVEL = 20
 
+# Queue can also represent Mythic 0 as level 0.
+M0_KEY_LEVEL = 0
+
+# Preset key brackets used in queue flow.
+KEY_BRACKETS = {
+    "0": {"label": "0", "min": 0, "max": 0},
+    "2-5": {"label": "2-5", "min": 2, "max": 5},
+    "6-9": {"label": "6-9", "min": 6, "max": 9},
+    "10+": {"label": "10+", "min": 10, "max": MAX_KEY_LEVEL},
+    "anything": {"label": "Anything", "min": 0, "max": MAX_KEY_LEVEL},
+}
+
 # =============================================================================
 # PARTY COMPOSITION
 # =============================================================================
@@ -58,3 +70,14 @@ PARTY_COMPOSITION = {
     "healer": 1,
     "dps": 3,
 }
+
+# =============================================================================
+# QUEUE ENGAGEMENT
+# =============================================================================
+
+# After this many seconds waiting (without active match), ask via DM if user
+# still wants to remain in queue.
+QUEUE_STAY_PROMPT_AFTER_SECONDS = 180
+
+# How long we wait for DM response before auto-removing from queue.
+QUEUE_STAY_RESPONSE_TIMEOUT_SECONDS = 90

@@ -103,23 +103,45 @@ async function postJson(path, body) {
     return payload;
 }
 
-function roleLabel(role) {
+function roleLabel(role, roles) {
+    if (Array.isArray(roles) && roles.length > 0) {
+        return roles.join(" > ");
+    }
     if (role === "tank") return "tank";
     if (role === "healer") return "healer";
     if (role === "dps") return "dps";
     return "group";
 }
 
-function roleClass(role) {
-    if (role === "tank") return "role-tank";
-    if (role === "healer") return "role-healer";
-    if (role === "dps") return "role-dps";
+function roleClass(role, roles) {
+    if (Array.isArray(roles) && roles.length > 1) return "role-group";
+    const primaryRole = Array.isArray(roles) && roles.length > 0 ? roles[0] : role;
+    if (primaryRole === "tank") return "role-tank";
+    if (primaryRole === "healer") return "role-healer";
+    if (primaryRole === "dps") return "role-dps";
     return "role-group";
 }
 
-function rolePill(role) {
-    const label = roleLabel(role);
-    return `<span class="role-pill ${roleClass(role)}">${label}</span>`;
+function rolePill(role, roles) {
+    const label = roleLabel(role, roles);
+    return `<span class="role-pill ${roleClass(role, roles)}">${label}</span>`;
+}
+
+function keyPreferenceLabel(entry) {
+    if (entry.key_bracket) {
+        return String(entry.key_bracket);
+    }
+    return `+${entry.key_min}-${entry.key_max}`;
+}
+
+function keystoneLabel(entry) {
+    if (!entry.has_keystone) {
+        return "No key";
+    }
+    if (entry.keystone_level) {
+        return `+${entry.keystone_level}`;
+    }
+    return "Has key";
 }
 
 function updateMetric(target, value) {
@@ -131,7 +153,7 @@ function updateMetric(target, value) {
 
 function renderQueue(data) {
     const guilds = data.guilds || [];
-    const totalInQueue = data.total_in_queue ?? 0;
+    const totalInQueue = data.total_players_in_queue ?? data.total_in_queue ?? 0;
     elements.queueTotal.textContent = `${totalInQueue} players`;
     updateMetric(elements.metricQueueTotal, `${totalInQueue}`);
 
@@ -148,18 +170,19 @@ function renderQueue(data) {
                     .map((entry) => `
                         <tr>
                             <td>${escapeHtml(entry.username)}</td>
-                            <td>${rolePill(entry.role)}</td>
-                            <td>+${entry.key_min}-${entry.key_max}</td>
+                            <td>${rolePill(entry.role, entry.roles)}</td>
+                            <td>${keyPreferenceLabel(entry)}</td>
+                            <td>${keystoneLabel(entry)}</td>
                         </tr>
                     `)
                     .join("")
-                : '<tr><td colspan="3" class="state-message">Queue empty.</td></tr>';
+                : '<tr><td colspan="4" class="state-message">Queue empty.</td></tr>';
 
             return `
                 <article class="queue-guild">
                     <header class="queue-guild-head">
                         <p class="queue-guild-name">${escapeHtml(guild.guild_name)}</p>
-                        <span class="pill pill-neutral">${guild.count} in queue</span>
+                        <span class="pill pill-neutral">${guild.player_count ?? guild.count ?? 0} players in queue</span>
                     </header>
                     <div class="queue-table-wrap">
                         <table class="queue-table">
@@ -168,6 +191,7 @@ function renderQueue(data) {
                                     <th>Player</th>
                                     <th>Role</th>
                                     <th>Range</th>
+                                    <th>Key</th>
                                 </tr>
                             </thead>
                             <tbody>${rows}</tbody>
@@ -260,7 +284,7 @@ function renderGroups(queueData) {
                                         (entry) => `
                                             <li>
                                                 <span>${escapeHtml(entry.username)}</span>
-                                                ${rolePill(entry.role)}
+                                                ${rolePill(entry.role, entry.roles)}
                                             </li>
                                         `
                                     )
@@ -348,7 +372,7 @@ function normalizeQueuePayload(payload) {
         return payload;
     }
 
-    const count = payload.count ?? 0;
+    const count = payload.player_count ?? payload.count ?? 0;
     return {
         total_in_queue: count,
         guilds: [payload],
@@ -498,11 +522,28 @@ async function handleAddFakePlayer(event) {
         guild_id: guildId,
         username: String(formData.get("name") ?? "").trim(),
         role: String(formData.get("role") ?? "dps"),
+        roles: [String(formData.get("role") ?? "dps")],
         key_min: Number(formData.get("key_min")),
         key_max: Number(formData.get("key_max")),
+        has_keystone: String(formData.get("has_keystone") ?? "false") === "true",
+        keystone_level: Number(formData.get("keystone_level")),
+        force_match: String(formData.get("force_match") ?? "true") === "true",
     };
+    if (!payload.has_keystone) {
+        payload.keystone_level = null;
+    }
     const result = await postJson(withBasePath("/api/admin/dev/add-fake-player"), payload);
-    setAdminStatus(`Fake player added (ID ${result.fake_user_id}) to guild ${result.guild_id}.`);
+    const forceMatch = result.force_match || {};
+    if (forceMatch.forced) {
+        const suffix = forceMatch.matched
+            ? ` Forced match formed with ${forceMatch.user_count} players.`
+            : forceMatch.error
+                ? ` Force match failed: ${forceMatch.error}`
+                : " Force match ran with no compatible group.";
+        setAdminStatus(`Fake player added (ID ${result.fake_user_id}) to guild ${result.guild_id}.${suffix}`);
+    } else {
+        setAdminStatus(`Fake player added (ID ${result.fake_user_id}) to guild ${result.guild_id}.`);
+    }
     await loadDashboard();
 }
 

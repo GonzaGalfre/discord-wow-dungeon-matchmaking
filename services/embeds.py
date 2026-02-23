@@ -15,6 +15,8 @@ from models.queue import queue_manager
 from services.matchmaking import (
     calculate_common_range,
     get_role_counts,
+    get_entry_roles,
+    resolve_role_assignments,
     get_entry_player_count,
     is_group_entry,
 )
@@ -42,11 +44,17 @@ def format_entry_composition(entry: dict) -> str:
             parts.append(f"⚔️{composition['dps']}")
         return " ".join(parts)
     else:
-        # It's solo: show individual role
-        role = entry.get("role")
-        if role and role in ROLES:
-            return f"{ROLES[role]['emoji']} {ROLES[role]['name']}"
+        roles = get_entry_roles(entry)
+        if roles:
+            return " > ".join(f"{ROLES[role]['emoji']} {ROLES[role]['name']}" for role in roles if role in ROLES)
         return "—"
+
+
+def format_entry_key_preference(entry: dict) -> str:
+    bracket = entry.get("key_bracket")
+    if bracket:
+        return str(bracket)
+    return f"{entry['key_min']}-{entry['key_max']}"
 
 
 def build_match_embed(users: List[dict]) -> discord.Embed:
@@ -78,7 +86,8 @@ def build_match_embed(users: List[dict]) -> discord.Embed:
     
     # Build player/group list
     player_lines = []
-    for user in users:
+    assignments = resolve_role_assignments(users) or {}
+    for idx, user in enumerate(users):
         composition = user.get("composition")
         if composition:
             # It's a group: show as leader + composition
@@ -86,15 +95,17 @@ def build_match_embed(users: List[dict]) -> discord.Embed:
             comp_text = format_entry_composition(user)
             player_lines.append(
                 f"👥 <@{user['user_id']}> (Grupo: {comp_text}, {total} jugadores) "
-                f"— Llaves {user['key_min']}-{user['key_max']}"
+                f"— Llaves {format_entry_key_preference(user)}"
             )
         else:
-            # It's solo: original format
-            role = user.get("role")
+            # It's solo: show resolved role and selected priorities
+            role = assignments.get(str(user.get("user_id")))
             role_info = ROLES.get(role, {"name": "?", "emoji": "❓"})
+            selected_roles = format_entry_composition(user)
+            key_text = format_entry_key_preference(user)
             player_lines.append(
-                f"{role_info['emoji']} <@{user['user_id']}> ({role_info['name']}) "
-                f"— Llaves {user['key_min']}-{user['key_max']}"
+                f"{role_info['emoji']} <@{user['user_id']}> ({role_info['name']} | {selected_roles}) "
+                f"— Llaves {key_text}"
             )
     
     # Add player list as a field
@@ -225,7 +236,8 @@ def get_queue_role_counts(guild_id: int) -> dict:
             counts["healer"] += composition.get("healer", 0)
             counts["dps"] += composition.get("dps", 0)
         else:
-            role = entry.get("role")
+            roles = get_entry_roles(entry)
+            role = roles[0] if roles else None
             if role in counts:
                 counts[role] += 1
     return counts
@@ -245,8 +257,8 @@ def build_lfg_setup_embed(guild_id: int) -> discord.Embed:
             "¿Buscas gente para hacer mazmorras Mythic+?\n\n"
             "**Cómo funciona:**\n"
             "1️⃣ Haz clic en el botón de abajo\n"
-            "2️⃣ Selecciona tu rol (Tanque, Sanador o DPS)\n"
-            "3️⃣ Elige tu rango de llaves preferido\n"
+            "2️⃣ Selecciona tu rol (puedes añadir más opcionalmente)\n"
+            "3️⃣ Elige tu bracket de llaves preferido\n"
             "4️⃣ ¡Serás notificado cuando otros busquen lo mismo!\n\n"
             "*Solo puedes estar en una cola a la vez.*"
         ),

@@ -11,6 +11,12 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from event_logger import log_event
+from services.queue_preferences import (
+    key_range_to_bracket,
+    normalize_roles,
+    validate_keystone_input,
+    validate_queue_key_range,
+)
 
 
 class QueueManager:
@@ -66,7 +72,11 @@ class QueueManager:
         key_min: int,
         key_max: int,
         role: Optional[str] = None,
-        composition: Optional[Dict[str, int]] = None
+        roles: Optional[List[str]] = None,
+        composition: Optional[Dict[str, int]] = None,
+        has_keystone: bool = False,
+        keystone_level: Optional[int] = None,
+        key_bracket: Optional[str] = None,
     ) -> None:
         """
         Add or update a user/group in the queue for a specific guild.
@@ -79,16 +89,29 @@ class QueueManager:
             username: Display name for notifications
             key_min: Minimum key level
             key_max: Maximum key level
-            role: Role for solo players (tank/healer/dps)
+            role: Legacy role for solo players (tank/healer/dps)
+            roles: Ordered role preferences for solo players
             composition: Role composition for groups {"tank": n, "healer": n, "dps": n}
+            has_keystone: Whether the entry has at least one keystone available
+            keystone_level: Keystone level available for this entry
+            key_bracket: Optional source bracket label/key
         """
+        validate_queue_key_range(key_min, key_max)
+        validate_keystone_input(has_keystone, keystone_level)
+        normalized_roles = normalize_roles(roles=roles, role=role)
+        primary_role = normalized_roles[0] if normalized_roles else None
+
         queue = self._get_guild_queue(guild_id)
         queue[user_id] = {
             "username": username,
-            "role": role,
+            "role": primary_role,
+            "roles": normalized_roles,
             "composition": composition,
             "key_min": key_min,
             "key_max": key_max,
+            "key_bracket": key_bracket or key_range_to_bracket(key_min, key_max),
+            "has_keystone": has_keystone,
+            "keystone_level": keystone_level,
             "timestamp": datetime.now(),
             "match_message_id": None,
             "match_channel_id": None,
@@ -98,10 +121,14 @@ class QueueManager:
             guild_id=guild_id,
             user_id=user_id,
             username=username,
-            role=role,
+            role=primary_role,
+            roles=normalized_roles,
             composition=composition,
             key_min=key_min,
             key_max=key_max,
+            key_bracket=queue[user_id]["key_bracket"],
+            has_keystone=has_keystone,
+            keystone_level=keystone_level,
             queue_size_after=len(queue),
         )
     
@@ -224,6 +251,24 @@ class QueueManager:
         """
         queue = self._get_guild_queue(guild_id)
         return user_id in queue
+
+    def touch_timestamp(self, guild_id: int, user_id: int) -> bool:
+        """
+        Refresh queue timestamp for an entry to "now".
+
+        Useful when user explicitly confirms they want to keep waiting.
+        """
+        queue = self._get_guild_queue(guild_id)
+        if user_id not in queue:
+            return False
+
+        queue[user_id]["timestamp"] = datetime.now()
+        log_event(
+            "queue_entry_timestamp_refreshed",
+            guild_id=guild_id,
+            user_id=user_id,
+        )
+        return True
     
     def is_empty(self, guild_id: int) -> bool:
         """

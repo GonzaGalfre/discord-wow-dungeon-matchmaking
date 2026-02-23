@@ -211,3 +211,55 @@ For testing multi-user scenarios without multiple accounts:
 - Admin commands: Create new `cogs/admin.py` cog
 - Key level input: Allow users to input actual key level completed (currently uses range minimum)
 
+## VM Operations Quick Reference (Google Cloud)
+
+Use these values/commands in future support chats for this project deployment:
+
+- **VM user**: `gonzaagalfre`
+- **Project directory**: `/home/gonzaagalfre/discord-bot/discord-wow-dungeon-matchmaking`
+- **Service name**: `discord-bot.service`
+- **Service file**: `/etc/systemd/system/discord-bot.service`
+- **Python executable used by service**: `/home/gonzaagalfre/discord-bot/discord-wow-dungeon-matchmaking/venv/bin/python3`
+- **Update script**: `/home/gonzaagalfre/discord-bot/discord-wow-dungeon-matchmaking/update.sh`
+- **Dashboard port**: `8080`
+
+### Most used commands (VM)
+
+```bash
+# Service health
+sudo systemctl status discord-bot.service --no-pager -l
+sudo journalctl -u discord-bot.service -n 200 --no-pager
+
+# Restart service
+sudo systemctl restart discord-bot.service
+
+# Check dashboard port
+ss -ltnp | grep 8080
+
+# Run updater manually
+cd /home/gonzaagalfre/discord-bot/discord-wow-dungeon-matchmaking
+./update.sh
+```
+
+### Environment values expected on VM (`.env`)
+
+```env
+DISCORD_TOKEN=...
+DASHBOARD_PASSWORD=...
+DASHBOARD_HOST=0.0.0.0
+DASHBOARD_PORT=8080
+```
+
+### Important deployment note
+
+- `bot_data.db` is runtime data and should not block `git pull`.
+- If `git pull` fails because of local DB changes, backup + restore flow:
+
+```bash
+cp bot_data.db ~/bot_data.db.backup.$(date +%F-%H%M%S)
+git restore -- bot_data.db
+git pull --ff-only origin main
+cp "$(ls -t ~/bot_data.db.backup.* | head -n 1)" bot_data.db
+sudo systemctl restart discord-bot.service
+```
+

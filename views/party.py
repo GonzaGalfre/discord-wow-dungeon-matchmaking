@@ -11,7 +11,13 @@ import discord
 
 from models.queue import queue_manager
 from models.stats import record_completed_key
-from services.matchmaking import is_group_entry, calculate_common_range
+from services.matchmaking import (
+    is_group_entry,
+    calculate_common_range,
+    group_has_keystone,
+    group_requires_keystone,
+    resolve_role_assignments,
+)
 from services.embeds import build_match_embed, format_entry_composition
 from event_logger import log_event
 from services.queue_status import refresh_lfg_setup_message
@@ -100,9 +106,12 @@ class GroupDMConfirmationSession:
                     "user_id": uid,
                     "username": entry["username"],
                     "role": entry.get("role"),
+                    "roles": entry.get("roles", []),
                     "composition": entry.get("composition"),
                     "key_min": entry["key_min"],
                     "key_max": entry["key_max"],
+                    "has_keystone": entry.get("has_keystone", False),
+                    "keystone_level": entry.get("keystone_level"),
                 }
             )
 
@@ -124,6 +133,19 @@ class GroupDMConfirmationSession:
 
         if channel is not None:
             await refresh_lfg_setup_message(self.client, self.guild_id, channel)
+
+        if group_requires_keystone(participants) and not group_has_keystone(participants):
+            await self.notify_channel(
+                "⚠️ **No se pudo cerrar el grupo.**\n"
+                "La combinación final requiere llave +2 o superior y nadie tiene piedra registrada."
+            )
+            self.completed = True
+            ACTIVE_DM_CONFIRMATIONS.pop(self.key, None)
+            return
+
+        role_assignments = resolve_role_assignments(participants) or {}
+        for participant in participants:
+            participant["resolved_role"] = role_assignments.get(str(participant["user_id"]))
 
         common_range = calculate_common_range(participants)
         key_level = common_range[0]
@@ -396,13 +418,12 @@ class ChannelFallbackConfirmationView(discord.ui.View):
 
 class PartyCompleteView(discord.ui.View):
     """
-    View containing 'Party Complete' and 'Leave Queue' buttons.
+    View containing the 'Party Complete' button.
     
     Attached to match notification messages.
     - 'Party Complete': Starts the confirmation process
-    - 'Leave Queue': Removes the clicking user/leader (and their group if applicable)
     
-    For groups: only the leader can interact with the buttons.
+    For groups: only the leader can interact with the button.
     
     Note: This view is not fully persistent after bot restart
     because it needs to know which users were in the match.
@@ -517,8 +538,8 @@ class PartyCompleteView(discord.ui.View):
                         inline=False,
                     )
                 else:
-                    role = entry.get("role", "desconocido") if entry else "desconocido"
-                    embed.add_field(name="Tu entrada", value=f"Jugador solo ({role})", inline=False)
+                    role_text = format_entry_composition(entry) if entry else "desconocido"
+                    embed.add_field(name="Tu entrada", value=f"Jugador solo ({role_text})", inline=False)
                 embed.set_footer(text="Solo tú puedes responder este DM.")
 
                 await user.send(embed=embed, view=DMConfirmationView(session, uid))
@@ -553,11 +574,6 @@ class PartyCompleteView(discord.ui.View):
                     view=ChannelFallbackConfirmationView(session),
                 )
 
-        await session.notify_channel(
-            "📩 **Confirmación iniciada por privado.**\n"
-            "Revisen sus DMs y pulsen *Sí* para cerrar el grupo."
-        )
-
         await interaction.followup.send(
             "✅ Envié la confirmación por DM a todos los jugadores/líderes del match.",
             ephemeral=True,
@@ -565,77 +581,3 @@ class PartyCompleteView(discord.ui.View):
 
         if session.all_confirmed():
             await session.finalize_group()
-    
-    @discord.ui.button(
-        label="Salir de Cola",
-        style=discord.ButtonStyle.danger,
-        emoji="🚪",
-    )
-    async def leave_queue_button(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ):
-        """
-        Handle Leave Queue button click.
-        
-        Removes the clicking user/leader from queue (including their group).
-        Useful when someone can't play anymore but others can.
-        If no one from the match remains in queue, deletes the message.
-        """
-        user_id = interaction.user.id
-        
-        # Verify the clicker is part of the match (solo player or group leader)
-        if user_id not in self.matched_user_ids:
-            await interaction.response.send_message(
-                "⚠️ Solo los jugadores o líderes de grupo pueden usar estos botones.",
-                ephemeral=True,
-            )
-            return
-        
-        # Check if it was a group
-        entry = queue_manager.get(self.guild_id, user_id)
-        was_group = entry and is_group_entry(entry)
-        
-        was_in_queue = queue_manager.remove(self.guild_id, user_id)
-        log_event(
-            "match_leave_queue_button_clicked",
-            guild_id=self.guild_id,
-            user_id=user_id,
-            was_in_queue=was_in_queue,
-            matched_user_ids=self.matched_user_ids,
-        )
-        if was_in_queue:
-            await refresh_lfg_setup_message(interaction.client, self.guild_id, interaction.channel)
-        
-        if was_in_queue:
-            if was_group:
-                await interaction.response.send_message(
-                    "✅ Tu grupo ha salido de la cola. ¡Hasta la próxima!",
-                    ephemeral=True,
-                )
-            else:
-                await interaction.response.send_message(
-                    "✅ Has salido de la cola. ¡Hasta la próxima!",
-                    ephemeral=True,
-                )
-        else:
-            await interaction.response.send_message(
-                "ℹ️ Ya no estabas en la cola.",
-                ephemeral=True,
-            )
-        
-        # Check if anyone from original match is still in queue
-        users_still_in_queue = [uid for uid in self.matched_user_ids if queue_manager.contains(self.guild_id, uid)]
-        
-        # If less than 2 remain, clear their match_message_id and delete the message
-        if len(users_still_in_queue) < 2:
-            # Clear match_message_id for remaining players so they can find new matches
-            for uid in users_still_in_queue:
-                queue_manager.clear_match_message(self.guild_id, uid)
-            
-            # Delete the notification message
-            try:
-                await interaction.message.delete()
-            except discord.errors.NotFound:
-                pass
-            except discord.errors.Forbidden:
-                pass

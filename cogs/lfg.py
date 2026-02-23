@@ -10,7 +10,6 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from config.settings import ROLES
 from models.queue import queue_manager
 from models.guild_settings import (
     save_guild_settings,
@@ -18,9 +17,12 @@ from models.guild_settings import (
     update_guild_channel,
     update_lfg_message_id,
 )
-from services.matchmaking import is_group_entry
-from services.embeds import format_entry_composition, build_lfg_setup_embed
-from services.queue_status import refresh_lfg_setup_message
+from services.embeds import (
+    format_entry_composition,
+    format_entry_key_preference,
+    build_lfg_setup_embed,
+)
+from services.queue_exit import leave_queue_entry
 from views.join_queue import JoinQueueView
 
 
@@ -195,6 +197,7 @@ class LFGCog(commands.Cog):
         total_players = 0
         
         for user_id, data in queue_manager.items(guild_id):
+            queue_since_unix = int(data["timestamp"].timestamp())
             composition = data.get("composition")
             if composition:
                 # It's a group
@@ -202,15 +205,16 @@ class LFGCog(commands.Cog):
                 total_players += total
                 comp_text = format_entry_composition(data)
                 user_lines.append(
-                    f"👥 <@{user_id}> (Grupo: {comp_text}, {total} jugadores) — Llaves {data['key_min']}-{data['key_max']}"
+                    f"👥 <@{user_id}> (Grupo: {comp_text}, {total} jugadores) — "
+                    f"Llaves {format_entry_key_preference(data)} — en cola <t:{queue_since_unix}:R>"
                 )
             else:
                 # It's solo
                 total_players += 1
-                role = data.get("role")
-                role_info = ROLES.get(role, {"name": "?", "emoji": "❓"})
+                roles_text = format_entry_composition(data)
                 user_lines.append(
-                    f"{role_info['emoji']} <@{user_id}> — Llaves {data['key_min']}-{data['key_max']}"
+                    f"🎭 <@{user_id}> ({roles_text}) — "
+                    f"Llaves {format_entry_key_preference(data)} — en cola <t:{queue_since_unix}:R>"
                 )
         
         embed.add_field(
@@ -239,46 +243,31 @@ class LFGCog(commands.Cog):
         user_id = interaction.user.id
         guild_id = interaction.guild_id
         
-        # Check if it was a group before removing
-        entry = queue_manager.get(guild_id, user_id)
-        was_group = entry and is_group_entry(entry)
-        has_match = entry and entry.get("match_message_id") is not None
-        
-        if queue_manager.remove(guild_id, user_id):
-            await refresh_lfg_setup_message(interaction.client, guild_id, interaction.channel)
-            if was_group:
-                if has_match:
-                    await interaction.response.send_message(
-                        "✅ ¡Tu grupo ha sido eliminado de la cola!\n\n"
-                        "💡 *Nota: Si tenías un emparejamiento activo, usa el botón "
-                        "'Salir de Cola' en el mensaje de emparejamiento para notificar "
-                        "correctamente a los demás jugadores.*",
-                        ephemeral=True,
-                    )
-                else:
-                    await interaction.response.send_message(
-                        "✅ ¡Tu grupo ha sido eliminado de la cola!",
-                        ephemeral=True,
-                    )
-            else:
-                if has_match:
-                    await interaction.response.send_message(
-                        "✅ ¡Has sido eliminado de la cola!\n\n"
-                        "💡 *Nota: Si tenías un emparejamiento activo, usa el botón "
-                        "'Salir de Cola' en el mensaje de emparejamiento para notificar "
-                        "correctamente a los demás jugadores.*",
-                        ephemeral=True,
-                    )
-                else:
-                    await interaction.response.send_message(
-                        "✅ ¡Has sido eliminado de la cola!",
-                        ephemeral=True,
-                    )
-        else:
+        result = await leave_queue_entry(
+            interaction.client,
+            guild_id,
+            user_id,
+            fallback_channel=interaction.channel,
+        )
+
+        if not result.get("removed"):
             await interaction.response.send_message(
                 "ℹ️ No estabas en la cola.",
                 ephemeral=True,
             )
+            return
+
+        if result.get("was_group"):
+            await interaction.response.send_message(
+                "✅ ¡Tu grupo ha sido eliminado de la cola!",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            "✅ ¡Has sido eliminado de la cola!",
+            ephemeral=True,
+        )
 
 
 async def setup(bot: commands.Bot):

@@ -112,7 +112,10 @@ def record_completed_key(
         username = participant["username"]
         
         # Handle solo players (have role string)
-        role = participant.get("role")
+        role = participant.get("resolved_role") or participant.get("role")
+        if not role:
+            roles = participant.get("roles") or []
+            role = roles[0] if roles else None
         composition = participant.get("composition")
         
         if role and not composition:

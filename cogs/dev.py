@@ -17,17 +17,15 @@ from discord.ext import commands
 
 from config.settings import ROLES, MIN_KEY_LEVEL, MAX_KEY_LEVEL, PARTY_COMPOSITION
 from models.queue import queue_manager
-from models.guild_settings import get_match_channel_id
 from services.matchmaking import (
     get_users_with_overlap,
     is_group_entry,
     get_entry_player_count,
     get_role_counts,
 )
-from services.embeds import build_match_embed
+from services.match_flow import trigger_matchmaking_for_entry
+from services.queue_preferences import validate_queue_key_range
 from event_logger import log_event
-from views.party import PartyCompleteView
-from views.role_selection import delete_old_match_messages
 
 
 class DevCog(commands.Cog):
@@ -82,9 +80,11 @@ class DevCog(commands.Cog):
         guild_id = interaction.guild_id
         
         # Validate key range
-        if key_min < MIN_KEY_LEVEL or key_max > MAX_KEY_LEVEL or key_min > key_max:
+        try:
+            validate_queue_key_range(key_min, key_max)
+        except ValueError:
             await interaction.response.send_message(
-                f"⚠️ Rango de llaves inválido. Debe ser {MIN_KEY_LEVEL}-{MAX_KEY_LEVEL} y min <= max.",
+                f"⚠️ Rango de llaves inválido. Debe ser 0 o {MIN_KEY_LEVEL}-{MAX_KEY_LEVEL}, y min <= max.",
                 ephemeral=True,
             )
             return
@@ -93,65 +93,32 @@ class DevCog(commands.Cog):
         fake_user_id = self._generate_fake_user_id()
         
         # Add to queue
-        queue_manager.add(guild_id, fake_user_id, nombre, key_min, key_max, role=rol)
+        queue_manager.add(guild_id, fake_user_id, nombre, key_min, key_max, roles=[rol])
         
         role_info = ROLES[rol]
         
         # Auto-match if enabled (simulates real player behavior)
         if auto_match:
-            matches = get_users_with_overlap(guild_id, key_min, key_max, fake_user_id)
-            
-            if len(matches) > 1:
-                # Match found! Create match notification
-                match_channel_id = get_match_channel_id(guild_id)
-                match_channel = None
-                if match_channel_id:
-                    match_channel = self.bot.get_channel(match_channel_id)
-                if not match_channel:
-                    match_channel = interaction.channel
-                
-                matched_user_ids = [u["user_id"] for u in matches]
-                
-                # Delete any existing match messages (handles updating existing matches)
-                await delete_old_match_messages(self.bot, guild_id, matched_user_ids)
-                
-                embed = build_match_embed(matches)
-                
-                # Create mentions (fake users shown as names)
-                mention_parts = []
-                for uid in matched_user_ids:
-                    if uid > 900000000000000000:  # Fake user
-                        entry = queue_manager.get(guild_id, uid)
-                        mention_parts.append(f"`{entry['username']}`")
-                    else:
-                        mention_parts.append(f"<@{uid}>")
-                mentions = " ".join(mention_parts)
-                
-                match_message = await match_channel.send(
-                    content=f"🔧 **[DEV MATCH AUTO]** {mentions}",
-                    embed=embed,
-                    view=PartyCompleteView(guild_id, matched_user_ids),
-                )
-                log_event(
-                    "match_message_created",
-                    guild_id=guild_id,
-                    channel_id=match_channel.id,
-                    message_id=match_message.id,
-                    matched_user_ids=matched_user_ids,
-                    triggered_by_user_id=interaction.user.id,
-                    source="dev_add_player",
-                )
-                
-                # Store match message reference for ALL users
-                for uid in matched_user_ids:
-                    queue_manager.set_match_message(guild_id, uid, match_message.id, match_channel.id)
-                
+            result = await trigger_matchmaking_for_entry(
+                self.bot,
+                guild_id,
+                fake_user_id,
+                key_min,
+                key_max,
+                source="dev_add_player",
+                fallback_channel=interaction.channel,
+                triggered_by_user_id=interaction.user.id,
+                mention_fake_users=True,
+                message_prefix="🔧 **[DEV MATCH AUTO]** ",
+            )
+
+            if result.get("matched"):
                 await interaction.response.send_message(
                     f"✅ **Jugador añadido y match creado automáticamente:**\n\n"
                     f"👤 **Nombre:** {nombre} (ID: `{fake_user_id}`)\n"
                     f"{role_info['emoji']} **Rol:** {role_info['name']}\n"
                     f"🗝️ **Rango:** {key_min}-{key_max}\n\n"
-                    f"🎉 **Match formado con {len(matches)} jugadores!**\n"
+                    f"🎉 **Match formado con {result.get('user_count', 0)} jugadores!**\n"
                     f"📍 Ver match en el canal de emparejamientos.",
                     ephemeral=True,
                 )
@@ -225,9 +192,11 @@ class DevCog(commands.Cog):
             return
         
         # Validate key range
-        if key_min < MIN_KEY_LEVEL or key_max > MAX_KEY_LEVEL or key_min > key_max:
+        try:
+            validate_queue_key_range(key_min, key_max)
+        except ValueError:
             await interaction.response.send_message(
-                f"⚠️ Rango de llaves inválido. Debe ser {MIN_KEY_LEVEL}-{MAX_KEY_LEVEL} y min <= max.",
+                f"⚠️ Rango de llaves inválido. Debe ser 0 o {MIN_KEY_LEVEL}-{MAX_KEY_LEVEL}, y min <= max.",
                 ephemeral=True,
             )
             return
@@ -246,59 +215,26 @@ class DevCog(commands.Cog):
         
         # Auto-match if enabled (simulates real player behavior)
         if auto_match:
-            matches = get_users_with_overlap(guild_id, key_min, key_max, fake_user_id)
-            
-            if len(matches) > 1:
-                # Match found! Create match notification
-                match_channel_id = get_match_channel_id(guild_id)
-                match_channel = None
-                if match_channel_id:
-                    match_channel = self.bot.get_channel(match_channel_id)
-                if not match_channel:
-                    match_channel = interaction.channel
-                
-                matched_user_ids = [u["user_id"] for u in matches]
-                
-                # Delete any existing match messages (handles updating existing matches)
-                await delete_old_match_messages(self.bot, guild_id, matched_user_ids)
-                
-                embed = build_match_embed(matches)
-                
-                # Create mentions (fake users shown as names)
-                mention_parts = []
-                for uid in matched_user_ids:
-                    if uid > 900000000000000000:  # Fake user
-                        entry = queue_manager.get(guild_id, uid)
-                        mention_parts.append(f"`{entry['username']}`")
-                    else:
-                        mention_parts.append(f"<@{uid}>")
-                mentions = " ".join(mention_parts)
-                
-                match_message = await match_channel.send(
-                    content=f"🔧 **[DEV MATCH AUTO]** {mentions}",
-                    embed=embed,
-                    view=PartyCompleteView(guild_id, matched_user_ids),
-                )
-                log_event(
-                    "match_message_created",
-                    guild_id=guild_id,
-                    channel_id=match_channel.id,
-                    message_id=match_message.id,
-                    matched_user_ids=matched_user_ids,
-                    triggered_by_user_id=interaction.user.id,
-                    source="dev_add_group",
-                )
-                
-                # Store match message reference for ALL users
-                for uid in matched_user_ids:
-                    queue_manager.set_match_message(guild_id, uid, match_message.id, match_channel.id)
-                
+            result = await trigger_matchmaking_for_entry(
+                self.bot,
+                guild_id,
+                fake_user_id,
+                key_min,
+                key_max,
+                source="dev_add_group",
+                fallback_channel=interaction.channel,
+                triggered_by_user_id=interaction.user.id,
+                mention_fake_users=True,
+                message_prefix="🔧 **[DEV MATCH AUTO]** ",
+            )
+
+            if result.get("matched"):
                 await interaction.response.send_message(
                     f"✅ **Grupo añadido y match creado automáticamente:**\n\n"
                     f"👥 **Líder:** {nombre} (ID: `{fake_user_id}`)\n"
                     f"🛡️ **Composición:** {tanks}T / {healers}H / {dps}D ({total} jugadores)\n"
                     f"🗝️ **Rango:** {key_min}-{key_max}\n\n"
-                    f"🎉 **Match formado con {len(matches)} jugadores/grupos!**\n"
+                    f"🎉 **Match formado con {result.get('user_count', 0)} jugadores/grupos!**\n"
                     f"📍 Ver match en el canal de emparejamientos.",
                     ephemeral=True,
                 )
@@ -368,9 +304,14 @@ class DevCog(commands.Cog):
                 entry_type = f"Grupo ({player_count}p)"
             else:
                 total_players += 1
-                role = data.get("role")
-                role_info = ROLES.get(role, {"emoji": "❓", "name": "?"})
-                role_str = f"{role_info['emoji']} {role_info['name']}"
+                roles = data.get("roles") or ([data.get("role")] if data.get("role") else [])
+                if roles:
+                    role_str = " > ".join(
+                        f"{ROLES.get(role, {'emoji': '❓', 'name': role})['emoji']} {ROLES.get(role, {'name': role})['name']}"
+                        for role in roles
+                    )
+                else:
+                    role_str = "❓ ?"
                 entry_type = "Solo"
             
             # Check if has active match
@@ -455,53 +396,20 @@ class DevCog(commands.Cog):
             if len(matches) < 2:
                 continue  # Not enough for a match
             
-            # Get match channel
-            match_channel_id = get_match_channel_id(guild_id)
-            match_channel = None
-            if match_channel_id:
-                match_channel = self.bot.get_channel(match_channel_id)
-            if not match_channel:
-                match_channel = interaction.channel
-            
-            # Create match
-            matched_user_ids = [u["user_id"] for u in matches]
-            
-            # Delete any existing match messages (handles updating existing matches)
-            await delete_old_match_messages(self.bot, guild_id, matched_user_ids)
-            
-            embed = build_match_embed(matches)
-            
-            # Create mentions (but for fake users, just use their names)
-            mention_parts = []
-            for uid in matched_user_ids:
-                # Check if it's a real user or fake
-                if uid > 900000000000000000:  # Fake user ID range
-                    entry = queue_manager.get(guild_id, uid)
-                    mention_parts.append(f"`{entry['username']}`")
-                else:
-                    mention_parts.append(f"<@{uid}>")
-            mentions = " ".join(mention_parts)
-            
-            match_message = await match_channel.send(
-                content=f"🔧 **[DEV MATCH]** {mentions}",
-                embed=embed,
-                view=PartyCompleteView(guild_id, matched_user_ids),
-            )
-            log_event(
-                "match_message_created",
-                guild_id=guild_id,
-                channel_id=match_channel.id,
-                message_id=match_message.id,
-                matched_user_ids=matched_user_ids,
-                triggered_by_user_id=interaction.user.id,
+            result = await trigger_matchmaking_for_entry(
+                self.bot,
+                guild_id,
+                user_id,
+                data["key_min"],
+                data["key_max"],
                 source="dev_force_match",
+                fallback_channel=interaction.channel,
+                triggered_by_user_id=interaction.user.id,
+                mention_fake_users=True,
+                message_prefix="🔧 **[DEV MATCH]** ",
             )
-            
-            # Store match message reference for ALL users
-            for uid in matched_user_ids:
-                queue_manager.set_match_message(guild_id, uid, match_message.id, match_channel.id)
-            
-            matches_created += 1
+            if result.get("matched"):
+                matches_created += 1
         
         await interaction.followup.send(
             f"✅ **Emparejamiento forzado completado.**\n\n"

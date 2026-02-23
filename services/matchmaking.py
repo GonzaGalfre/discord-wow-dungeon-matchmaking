@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Tuple
 
 from config.settings import PARTY_COMPOSITION
 from models.queue import queue_manager
+from services.queue_preferences import normalize_roles, requires_keystone_for_range
 
 
 def is_valid_composition(users: List[dict]) -> bool:
@@ -38,13 +39,75 @@ def is_valid_composition(users: List[dict]) -> bool:
         >>> is_valid_composition([{"role": "tank"}, {"role": "tank"}])
         False  # 2 tanks is invalid
     """
-    role_counts = get_role_counts(users)
-    
-    for role, count in role_counts.items():
+    return resolve_role_assignments(users) is not None
+
+
+def get_entry_roles(entry: dict) -> List[str]:
+    """
+    Return ordered role preferences for a solo entry.
+    """
+    return normalize_roles(roles=entry.get("roles"), role=entry.get("role"))
+
+
+def _entry_assignment_key(entry: dict, index: int) -> str:
+    """
+    Stable key for tracking resolved roles in temporary matchmaking groups.
+    """
+    user_id = entry.get("user_id")
+    if user_id is not None:
+        return str(user_id)
+    return f"idx:{index}"
+
+
+def resolve_role_assignments(users: List[dict]) -> Optional[Dict[str, str]]:
+    """
+    Resolve one role per solo entry while respecting party composition limits.
+    """
+    fixed_counts = {"tank": 0, "healer": 0, "dps": 0}
+    variable_entries = []
+
+    for idx, user in enumerate(users):
+        composition = user.get("composition")
+        if composition:
+            for role, count in composition.items():
+                if role in fixed_counts:
+                    fixed_counts[role] += count
+            continue
+
+        roles = get_entry_roles(user)
+        if not roles:
+            return None
+        variable_entries.append((idx, user, roles))
+
+    for role, count in fixed_counts.items():
         if count > PARTY_COMPOSITION[role]:
-            return False
-    
-    return True
+            return None
+
+    # Lower branching factor first.
+    variable_entries.sort(key=lambda item: len(item[2]))
+    assigned: Dict[str, str] = {}
+
+    def _backtrack(position: int, running_counts: Dict[str, int]) -> bool:
+        if position >= len(variable_entries):
+            return True
+
+        idx, entry, roles = variable_entries[position]
+        entry_key = _entry_assignment_key(entry, idx)
+
+        for role in roles:
+            if running_counts[role] >= PARTY_COMPOSITION[role]:
+                continue
+            running_counts[role] += 1
+            assigned[entry_key] = role
+            if _backtrack(position + 1, running_counts):
+                return True
+            running_counts[role] -= 1
+            assigned.pop(entry_key, None)
+        return False
+
+    if not _backtrack(0, dict(fixed_counts)):
+        return None
+    return assigned
 
 
 def get_role_counts(users: List[dict]) -> Dict[str, int]:
@@ -62,8 +125,9 @@ def get_role_counts(users: List[dict]) -> Dict[str, int]:
         Dictionary with total count of each role
     """
     counts = {"tank": 0, "healer": 0, "dps": 0}
-    
-    for user in users:
+    assignments = resolve_role_assignments(users)
+
+    for idx, user in enumerate(users):
         composition = user.get("composition")
         if composition:
             # It's a group: sum the full composition
@@ -71,12 +135,40 @@ def get_role_counts(users: List[dict]) -> Dict[str, int]:
                 if role in counts:
                     counts[role] += count
         else:
-            # It's solo: add 1 to the individual role
-            role = user.get("role")
+            # It's solo: add 1 to resolved role
+            key = _entry_assignment_key(user, idx)
+            role = assignments.get(key) if assignments else None
+            if not role:
+                roles = get_entry_roles(user)
+                role = roles[0] if roles else None
             if role in counts:
                 counts[role] += 1
-    
+
     return counts
+
+
+def group_requires_keystone(users: List[dict]) -> bool:
+    """
+    Return True if group's common range includes Mythic+ 2 or higher.
+    """
+    common_min, common_max = calculate_common_range(users)
+    return requires_keystone_for_range(common_min, common_max)
+
+
+def group_has_keystone(users: List[dict]) -> bool:
+    """
+    Return True when at least one queue entry provides a keystone.
+    """
+    return any(bool(entry.get("has_keystone")) for entry in users)
+
+
+def is_valid_keystone_requirement(users: List[dict]) -> bool:
+    """
+    Keystone rule: if group range includes 2+, at least one member must have a key.
+    """
+    if not group_requires_keystone(users):
+        return True
+    return group_has_keystone(users)
 
 
 def is_group_entry(entry: dict) -> bool:
@@ -215,7 +307,7 @@ def get_users_with_overlap(guild_id: int, key_min: int, key_max: int, new_user_i
         temp_group = matched_group + [potential_user]
         
         # Only add if composition remains valid
-        if is_valid_composition(temp_group):
+        if is_valid_composition(temp_group) and is_valid_keystone_requirement(temp_group):
             matched_group.append(potential_user)
     
     return matched_group
@@ -285,7 +377,7 @@ def try_join_existing_match(
         new_user_entry = {"user_id": new_user_id, **new_user_data}
         potential_match = match_entries + [new_user_entry]
         
-        if is_valid_composition(potential_match):
+        if is_valid_composition(potential_match) and is_valid_keystone_requirement(potential_match):
             # This match works! Return it
             return potential_match
     
@@ -411,7 +503,7 @@ def find_all_independent_groups(guild_id: int) -> List[List[dict]]:
                 break
         
         # Only add groups with at least 2 players worth of entries
-        if count_total_players(current_group) >= 2:
+        if count_total_players(current_group) >= 2 and is_valid_keystone_requirement(current_group):
             groups.append(current_group)
             used_indices.update(current_group_indices)
     
