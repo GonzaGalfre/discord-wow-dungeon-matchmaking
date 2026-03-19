@@ -13,6 +13,7 @@ import discord
 from discord.ext import commands
 
 from views.join_queue import JoinQueueView
+from views.move_panel import MovePanelView
 from models.guild_settings import get_all_configured_guilds
 from services.queue_presence import queue_presence_watchdog
 
@@ -29,6 +30,7 @@ class LFGBot(commands.Bot):
     
     def __init__(self):
         intents = discord.Intents.default()
+        intents.voice_states = True
         
         super().__init__(
             command_prefix="!",
@@ -51,6 +53,7 @@ class LFGBot(commands.Bot):
         """
         # Register persistent views
         self.add_view(JoinQueueView())
+        self.add_view(MovePanelView())
         if self._queue_presence_task is None:
             self._queue_presence_task = asyncio.create_task(queue_presence_watchdog(self))
         
@@ -74,6 +77,12 @@ class LFGBot(commands.Bot):
             print(f"✗ Error cargando Dev cog: {e}")
             import traceback
             traceback.print_exc()
+        
+        try:
+            await self.load_extension("cogs.voice")
+            print("✓ Voice cog cargado")
+        except Exception as e:
+            print(f"✗ Error cargando Voice cog: {e}")
         
         # Sync slash commands globally
         await self.tree.sync()

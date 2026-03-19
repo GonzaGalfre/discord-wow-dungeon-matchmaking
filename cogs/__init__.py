@@ -7,10 +7,12 @@ This module contains Discord slash commands organized as Cogs.
 from cogs.lfg import LFGCog
 from cogs.stats import StatsCog
 from cogs.dev import DevCog
+from cogs.voice import VoiceCog
 
 __all__ = [
     "LFGCog",
     "StatsCog",
     "DevCog",
+    "VoiceCog",
 ]
 

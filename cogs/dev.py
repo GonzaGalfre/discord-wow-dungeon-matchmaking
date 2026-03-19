@@ -375,7 +375,10 @@ class DevCog(commands.Cog):
             return
         
         # Defer response as this might take a moment
-        await interaction.response.defer(ephemeral=True)
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except discord.NotFound:
+            return
         
         matches_created = 0
         
@@ -520,8 +523,11 @@ class DevCog(commands.Cog):
         
         # Clear existing queue first
         queue_manager.clear(guild_id)
-        
-        await interaction.response.defer(ephemeral=True)
+
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except discord.NotFound:
+            return
         
         if escenario == "simple":
             # Scenario 1: Simple match (2 players)
@@ -628,7 +634,10 @@ class DevCog(commands.Cog):
         NOTE: This can cause duplicate commands if global sync has already completed.
         Use /dev_clear_sync to remove duplicates and rely on global commands.
         """
-        await interaction.response.defer(ephemeral=True)
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except discord.NotFound:
+            return
         try:
             # Copy global commands to this guild
             interaction.client.tree.copy_global_to(guild=interaction.guild)
@@ -659,7 +668,10 @@ class DevCog(commands.Cog):
         Use this to remove duplicate commands that appear after using /dev_sync
         when the global sync has already completed.
         """
-        await interaction.response.defer(ephemeral=True)
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except discord.NotFound:
+            return
         try:
             # Clear all guild-specific commands
             interaction.client.tree.clear_commands(guild=interaction.guild)

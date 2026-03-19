@@ -19,6 +19,11 @@ from web.server import start_dashboard_server
 
 def main():
     """Entry point for the bot."""
+    import sys
+    if sys.platform == 'win32':
+        import io
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
+
     if not DISCORD_TOKEN:
         print("❌ ERROR: ¡DISCORD_TOKEN no encontrado!")
         print("Asegúrate de tener un archivo .env con DISCORD_TOKEN=tu_token_aquí")

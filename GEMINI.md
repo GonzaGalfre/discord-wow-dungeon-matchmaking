@@ -93,6 +93,13 @@ The project follows a modular architecture. **Do not put business logic in `main
 4. `cp "$(ls -t ~/bot_data.db.backup.* | head -n 1)" bot_data.db`
 5. `sudo systemctl restart discord-bot.service`
 
+### Deployment gotchas (learned in production)
+- On VM, `bot_data.db` might be untracked. If `git restore -- bot_data.db` fails with pathspec error, skip that step.
+- `git pull --ff-only` can fail because runtime logs changed locally (for example `logs/events.jsonl`).
+  - Quick unblock: `sudo systemctl stop discord-bot.service && git restore -- logs/events.jsonl && git pull --ff-only origin main && sudo systemctl start discord-bot.service`
+  - Long-term fix: do not track runtime JSONL logs in git (ignore `logs/*.jsonl` and remove tracked log files once).
+- Some VMs do not have `rg` installed; use `grep -n` fallback for quick code checks.
+
 ## 9. Common Tasks
 - **Adding a new Role:** Update `config/settings.py` (`ROLES`, `PARTY_COMPOSITION`).
 - **New Command:** Create `cogs/new_feature.py`, setup class, add to `bot.py` extensions.

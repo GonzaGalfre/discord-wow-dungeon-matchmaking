@@ -37,7 +37,11 @@ def _ensure_guild_settings_table() -> None:
     columns = {row[1] for row in cursor.fetchall()}
     if "lfg_message_id" not in columns:
         cursor.execute("ALTER TABLE guild_settings ADD COLUMN lfg_message_id INTEGER")
-    
+    if "move_panel_channel_id" not in columns:
+        cursor.execute("ALTER TABLE guild_settings ADD COLUMN move_panel_channel_id INTEGER")
+    if "move_panel_message_id" not in columns:
+        cursor.execute("ALTER TABLE guild_settings ADD COLUMN move_panel_message_id INTEGER")
+
     conn.commit()
 
 
@@ -223,6 +227,47 @@ def get_lfg_message_id(guild_id: int) -> Optional[int]:
     if settings:
         return settings.get("lfg_message_id")
     return None
+
+
+def get_move_panel_ids(guild_id: int) -> Optional[tuple]:
+    """
+    Get the move panel channel and message IDs for a guild.
+
+    Returns:
+        (channel_id, message_id) tuple, or None if not configured
+    """
+    settings = get_guild_settings(guild_id)
+    if settings:
+        ch = settings.get("move_panel_channel_id")
+        msg = settings.get("move_panel_message_id")
+        if ch and msg:
+            return (ch, msg)
+    return None
+
+
+def update_move_panel_ids(guild_id: int, channel_id: int, message_id: int) -> bool:
+    """
+    Save or update the move panel channel and message IDs for a guild.
+
+    Returns:
+        True if updated, False if guild not found
+    """
+    _ensure_guild_settings_table()
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        UPDATE guild_settings
+        SET move_panel_channel_id = ?, move_panel_message_id = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE guild_id = ?
+        """,
+        (channel_id, message_id, guild_id),
+    )
+
+    conn.commit()
+    return cursor.rowcount > 0
 
 
 def update_lfg_message_id(guild_id: int, message_id: int) -> bool:

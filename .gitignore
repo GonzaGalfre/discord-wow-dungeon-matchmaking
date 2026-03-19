@@ -29,5 +29,6 @@ Thumbs.db
 
 # Logs
 *.log
+logs/*.jsonl
 
 bot_data.db

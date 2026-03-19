@@ -252,14 +252,21 @@ DASHBOARD_PORT=8080
 
 ### Important deployment note
 
-- `bot_data.db` is runtime data and should not block `git pull`.
-- If `git pull` fails because of local DB changes, backup + restore flow:
+- `bot_data.db` is runtime data and may be untracked on VM. If `git restore -- bot_data.db` fails with pathspec error, skip it.
+- Runtime logs (for example `logs/events.jsonl`) can be tracked and modified by the running service, which blocks `git pull --ff-only`.
+- If `git pull` is blocked by local runtime file changes, stop service first, restore only the blocking tracked file(s), pull, then start service.
+- Long-term: do not track runtime JSONL logs (`logs/*.jsonl`) to avoid recurring pull conflicts.
+- Some VMs do not have `rg` installed; use `grep -n` as fallback for quick code checks.
+
+If `git pull` fails because of local DB/log changes, safe flow:
 
 ```bash
-cp bot_data.db ~/bot_data.db.backup.$(date +%F-%H%M%S)
-git restore -- bot_data.db
+sudo systemctl stop discord-bot.service
+[ -f bot_data.db ] && cp bot_data.db ~/bot_data.db.backup.$(date +%F-%H%M%S)
+[ -f bot_data.db ] && git restore -- bot_data.db || true
+[ -f logs/events.jsonl ] && git restore -- logs/events.jsonl || true
 git pull --ff-only origin main
-cp "$(ls -t ~/bot_data.db.backup.* | head -n 1)" bot_data.db
-sudo systemctl restart discord-bot.service
+[ -f "$(ls -t ~/bot_data.db.backup.* 2>/dev/null | head -n 1)" ] && cp "$(ls -t ~/bot_data.db.backup.* | head -n 1)" bot_data.db || true
+sudo systemctl start discord-bot.service
 ```
 
