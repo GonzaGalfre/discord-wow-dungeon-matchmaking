@@ -17,6 +17,7 @@ from services.voice_move import move_all_members, build_move_embed, build_error_
 
 # user_id -> {"from": int | None, "to": int | None}  (channel IDs)
 _state: dict[int, dict] = {}
+_VOICE_OR_STAGE_TYPES = [discord.ChannelType.voice, discord.ChannelType.stage_voice]
 
 
 # =============================================================================
@@ -44,7 +45,7 @@ class _OriginSelect(discord.ui.ChannelSelect):
     def __init__(self) -> None:
         super().__init__(
             placeholder="1. Selecciona el canal de origen...",
-            channel_types=[discord.ChannelType.voice],
+            channel_types=_VOICE_OR_STAGE_TYPES,
             custom_id="move_panel:select:from",
             row=0,
         )
@@ -58,7 +59,7 @@ class _DestinationSelect(discord.ui.ChannelSelect):
     def __init__(self) -> None:
         super().__init__(
             placeholder="2. Selecciona el canal de destino...",
-            channel_types=[discord.ChannelType.voice],
+            channel_types=_VOICE_OR_STAGE_TYPES,
             custom_id="move_panel:select:to",
             row=1,
         )
@@ -120,7 +121,7 @@ class MovePanelView(discord.ui.View):
         source = interaction.guild.get_channel(from_id)
         destination = interaction.guild.get_channel(to_id)
 
-        if not isinstance(source, discord.VoiceChannel) or not isinstance(destination, discord.VoiceChannel):
+        if not isinstance(source, (discord.VoiceChannel, discord.StageChannel)) or not isinstance(destination, (discord.VoiceChannel, discord.StageChannel)):
             await interaction.response.send_message(
                 embed=build_error_embed(
                     "Uno de los canales seleccionados ya no existe. Vuelve a seleccionarlos."

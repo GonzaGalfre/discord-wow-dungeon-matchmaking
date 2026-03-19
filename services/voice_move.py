@@ -10,8 +10,10 @@ import asyncio
 
 import discord
 
+MoveChannel = discord.VoiceChannel | discord.StageChannel
 
-async def move_member_async(member: discord.Member, destination: discord.VoiceChannel) -> bool:
+
+async def move_member_async(member: discord.Member, destination: MoveChannel) -> bool:
     """
     Move a single member to a voice channel.
 
@@ -27,8 +29,8 @@ async def move_member_async(member: discord.Member, destination: discord.VoiceCh
 
 
 async def move_all_members(
-    source: discord.VoiceChannel,
-    destination: discord.VoiceChannel,
+    source: MoveChannel,
+    destination: MoveChannel,
 ) -> int:
     """
     Move all members from source to destination voice channel concurrently.
@@ -55,8 +57,8 @@ async def move_all_members(
 
 def build_move_embed(
     nb_moved: int,
-    source: discord.VoiceChannel,
-    destination: discord.VoiceChannel,
+    source: MoveChannel,
+    destination: MoveChannel,
 ) -> discord.Embed:
     """
     Build the result embed for a move operation.

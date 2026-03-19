@@ -40,6 +40,9 @@ discord-wow-dungeon-matchmaking/
 | `services/leaderboard.py` | Leaderboard embed builders |
 | `cogs/lfg.py` | LFG commands (/setup, /cola, /salir) |
 | `cogs/stats.py` | Stats commands (/leaderboard, /mystats) + weekly announcement task |
+| `cogs/voice.py` | Voice move commands (/move, /setup_move) |
+| `services/voice_move.py` | Shared move business logic (move_all_members, embed builders) — imported by both cog and views |
+| `views/move_panel.py` | Persistent move panel view (inline ChannelSelect dropdowns + Move button) |
 
 ## Rules for Adding New Features
 
@@ -121,11 +124,36 @@ The bot includes a fix for Windows console encoding in `main.py`:
 ```python
 import sys
 if sys.platform == 'win32':
-    import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+ import io
+ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
 ```
 
 This allows emojis and special characters to display correctly in Windows terminals. Keep this code at the start of `main()` function.
+
+### Linux / VM Console Output (Systemd)
+
+On Linux when running as a systemd service, Python buffers stdout and `print()` output won't appear in `journalctl`. Fix with `PYTHONUNBUFFERED=1` in the service override:
+
+```bash
+sudo systemctl edit discord-bot.service --force
+# Add:
+# [Service]
+# Environment=PYTHONUNBUFFERED=1
+sudo systemctl daemon-reload && sudo systemctl restart discord-bot.service
+```
+
+### Stale Interaction Handling (Error 10062)
+
+When the bot restarts while a slash command interaction is in-flight, Discord delivers the interaction to the new process but the token is already expired. This causes `discord.NotFound: 404 (error code: 10062)` on `defer()`. Suppress it with:
+
+```python
+try:
+    await interaction.response.defer(ephemeral=True)
+except discord.NotFound:
+    return
+```
+
+This pattern is already applied in `cogs/voice.py` and `cogs/dev.py`. Apply it to any new command that uses `defer()`.
 
 ## Discord Slash Command Syncing
 

@@ -13,6 +13,8 @@ from discord.ext import commands
 from services.voice_move import move_all_members, build_move_embed, build_error_embed
 from models.guild_settings import get_move_panel_ids, update_move_panel_ids
 
+MoveChannel = discord.VoiceChannel | discord.StageChannel
+
 
 class VoiceCog(commands.Cog):
     """
@@ -42,8 +44,8 @@ class VoiceCog(commands.Cog):
     async def move_command(
         self,
         interaction: discord.Interaction,
-        destination: discord.VoiceChannel,
-        source: discord.VoiceChannel | None = None,
+        destination: MoveChannel,
+        source: MoveChannel | None = None,
     ) -> None:
         member = interaction.guild.get_member(interaction.user.id)
 
@@ -56,10 +58,10 @@ class VoiceCog(commands.Cog):
                     ephemeral=True,
                 )
                 return
-            if not isinstance(member.voice.channel, discord.VoiceChannel):
+            if not isinstance(member.voice.channel, (discord.VoiceChannel, discord.StageChannel)):
                 await interaction.response.send_message(
                     embed=build_error_embed(
-                        "No especificaste un canal de origen y no estás en un canal de voz válido."
+                        "No especificaste un canal de origen y no estás en un canal de voz/stage válido."
                     ),
                     ephemeral=True,
                 )

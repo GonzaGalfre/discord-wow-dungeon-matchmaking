@@ -10,6 +10,7 @@ This is a Discord bot for World of Warcraft Mythic+ dungeon matchmaking. It help
 - **Dynamic Matchmaking:** Matches grow from 2 → 5 players; incomplete matches can accept new members.
 - **Smart Match Prevention:** Players cannot be in multiple matches simultaneously.
 - Web Dashboard for admin monitoring.
+- **Voice Move Panel:** Persistent admin panel to move all members between voice channels (see `cogs/voice.py`, `services/voice_move.py`, `views/move_panel.py`).
 
 ## 2. Technology Stack
 - **Language:** Python 3.8+
@@ -25,9 +26,9 @@ The project follows a modular architecture. **Do not put business logic in `main
 |---|---|
 | `main.py` | **Entry Point Only.** Initializes bot, fixes Windows encoding. No logic. |
 | `bot.py` | `LFGBot` class. Handles `setup_hook` and command syncing. |
-| `cogs/` | Slash commands (`lfg.py`, `stats.py`, `dev.py`). |
-| `views/` | UI Components (Buttons, Selects, Modals). |
-| `services/` | Business logic (Matchmaking, Embed generation). |
+| `cogs/` | Slash commands (`lfg.py`, `stats.py`, `dev.py`, `voice.py`). |
+| `views/` | UI Components (Buttons, Selects, Modals). `move_panel.py` = persistent voice move panel. |
+| `services/` | Business logic (Matchmaking, Embed generation, `voice_move.py` = move helpers). |
 | `models/` | Data layer (QueueManager, DB connection, Stats). |
 | `config/` | Configuration & Constants (`settings.py`). |
 | `web/` | Web dashboard application. |
@@ -99,11 +100,20 @@ The project follows a modular architecture. **Do not put business logic in `main
   - Quick unblock: `sudo systemctl stop discord-bot.service && git restore -- logs/events.jsonl && git pull --ff-only origin main && sudo systemctl start discord-bot.service`
   - Long-term fix: do not track runtime JSONL logs in git (ignore `logs/*.jsonl` and remove tracked log files once).
 - Some VMs do not have `rg` installed; use `grep -n` fallback for quick code checks.
+- **`print()` output not visible in `journalctl`:** Python buffers stdout when running as a systemd service (not a TTY). Fix by adding `PYTHONUNBUFFERED=1` to the service override:
+  ```bash
+  sudo systemctl edit discord-bot.service --force
+  # Add under [Service]:
+  # Environment=PYTHONUNBUFFERED=1
+  sudo systemctl daemon-reload && sudo systemctl restart discord-bot.service
+  ```
+- **Stale interaction errors (10062):** If the bot restarts while a command interaction is pending, Discord sends the interaction to the new instance with an already-expired token. Wrap `interaction.response.defer()` in `try/except discord.NotFound: return` to suppress these harmless errors. Already applied in `cogs/voice.py` and `cogs/dev.py`.
 
 ## 9. Common Tasks
 - **Adding a new Role:** Update `config/settings.py` (`ROLES`, `PARTY_COMPOSITION`).
 - **New Command:** Create `cogs/new_feature.py`, setup class, add to `bot.py` extensions.
 - **Database Change:** Update `models/database.py` (schema is auto-initialized).
+- **Voice Move Panel setup:** Run `/setup_move` (admin only) in the desired channel. The panel persists across bot restarts. Re-run `/setup_move` to move it to a different channel. Business logic is in `services/voice_move.py`; UI is in `views/move_panel.py`. Any new voice-related UI should import from `services/voice_move.py` to avoid duplication.
 
 ## 10. Response Guidelines
 - When asked to implement a feature, **check existing `services/`** first to reuse logic.
