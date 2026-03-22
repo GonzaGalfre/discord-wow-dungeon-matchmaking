@@ -81,3 +81,10 @@ QUEUE_STAY_PROMPT_AFTER_SECONDS = 180
 
 # How long we wait for DM response before auto-removing from queue.
 QUEUE_STAY_RESPONSE_TIMEOUT_SECONDS = 90
+
+# =============================================================================
+# VOICE MOVE BEHAVIOR
+# =============================================================================
+
+VOICE_MOVE_BATCH_SIZE = 5
+VOICE_MOVE_BATCH_DELAY_SECONDS = 1.0

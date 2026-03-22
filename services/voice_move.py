@@ -10,6 +10,8 @@ import asyncio
 
 import discord
 
+from config.settings import VOICE_MOVE_BATCH_DELAY_SECONDS, VOICE_MOVE_BATCH_SIZE
+
 MoveChannel = discord.VoiceChannel | discord.StageChannel
 
 
@@ -31,13 +33,11 @@ async def move_member_async(member: discord.Member, destination: MoveChannel) ->
 async def move_all_members(
     source: MoveChannel,
     destination: MoveChannel,
+    batch_size: int = VOICE_MOVE_BATCH_SIZE,
+    batch_delay_seconds: float = VOICE_MOVE_BATCH_DELAY_SECONDS,
 ) -> int:
     """
-    Move all members from source to destination voice channel concurrently.
-
-    Uses asyncio.gather so all move requests are fired at once and discord.py's
-    built-in rate-limit handling queues them efficiently. This scales well for
-    20-30 members vs a sequential loop which would be very slow.
+    Move all members from source to destination in throttled batches.
 
     Snapshots the member list before issuing requests so members that leave
     mid-operation are not re-processed.
@@ -48,11 +48,28 @@ async def move_all_members(
     if not members:
         return 0
 
-    results = await asyncio.gather(
-        *[move_member_async(member, destination) for member in members],
-        return_exceptions=True,
-    )
-    return sum(1 for r in results if r is True)
+    safe_batch_size = max(1, batch_size)
+    safe_batch_delay = max(0.0, batch_delay_seconds)
+    moved_count = 0
+
+    for index in range(0, len(members), safe_batch_size):
+        batch = members[index : index + safe_batch_size]
+        results = await asyncio.gather(
+            *[move_member_async(member, destination) for member in batch],
+            return_exceptions=True,
+        )
+
+        for result in results:
+            if result is True:
+                moved_count += 1
+            elif isinstance(result, discord.Forbidden):
+                raise result
+
+        has_more_batches = index + safe_batch_size < len(members)
+        if has_more_batches and safe_batch_delay > 0:
+            await asyncio.sleep(safe_batch_delay)
+
+    return moved_count
 
 
 def build_move_embed(
