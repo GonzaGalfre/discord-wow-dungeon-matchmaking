@@ -1,5 +1,5 @@
 """
-Move Panel views for the WoW Mythic+ LFG Bot.
+Move panel views for WipyBot.
 
 MovePanelView -- persistent message with two inline ChannelSelect dropdowns
 (Origen / Destino) and a Move button. Everything lives in the panel message

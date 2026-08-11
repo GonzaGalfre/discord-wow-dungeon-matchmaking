@@ -1,5 +1,5 @@
 """
-Voice move service for the WoW Mythic+ LFG Bot.
+Voice move service for WipyBot.
 
 Core business logic for moving members between voice channels.
 Imported by both the /move slash command and the move panel UI view

@@ -3,206 +3,64 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>WoW LFG Command Center</title>
-    <meta name="description" content="WoW Mythic+ queue and group formation dashboard">
+    <title>WipyBot Dashboard</title>
+    <meta name="description" content="WipyBot admin dashboard">
     <meta name="dashboard-base-path" content="__DASHBOARD_BASE_PATH__">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="__DASHBOARD_CSS_URL__">
 </head>
 <body>
-    <div class="dashboard-shell">
-        <header class="topbar panel">
-            <div class="topbar-title-wrap">
-                <p class="kicker">WoW Mythic+ Operations</p>
-                <h1>Command Center</h1>
+    <main class="shell">
+        <header class="panel hero">
+            <div>
+                <p class="kicker">WipyBot</p>
+                <h1>Infrastructure Dashboard</h1>
+                <p class="muted">Matchmaking has been removed. This dashboard is ready for the raid signup feature.</p>
             </div>
-            <div class="topbar-controls">
-                <label class="guild-filter" for="guildFilter">
-                    <span>Guild</span>
-                    <select id="guildFilter" aria-label="Filter by guild">
-                        <option value="">All guilds</option>
-                    </select>
-                </label>
-                <span class="poll-indicator">
-                    <span class="poll-dot" aria-hidden="true"></span>
-                    Polling every 10s
-                </span>
-                <span id="lastUpdated" class="last-updated">Last sync: --:--:--</span>
-                <button id="refreshBtn" type="button" class="refresh-button">Refresh now</button>
+            <div class="actions">
+                <span id="lastUpdated" class="pill">Last sync: --</span>
+                <button id="refreshBtn" type="button">Refresh</button>
             </div>
         </header>
 
-        <section class="metrics-grid" aria-label="Summary metrics">
-            <article class="metric-card panel">
-                <p class="metric-label">Players In Queue</p>
-                <p id="metricQueueTotal" class="metric-value">--</p>
+        <section class="grid">
+            <article class="panel metric">
+                <p class="label">Bot Status</p>
+                <p id="botStatus" class="value">--</p>
             </article>
-            <article class="metric-card panel">
-                <p class="metric-label">Groups Forming</p>
-                <p id="metricGroupsTotal" class="metric-value">--</p>
+            <article class="panel metric">
+                <p class="label">Bot User</p>
+                <p id="botUser" class="value small">--</p>
             </article>
-            <article class="metric-card panel">
-                <p class="metric-label">Weekly Keys</p>
-                <p id="metricWeeklyKeys" class="metric-value">--</p>
+            <article class="panel metric">
+                <p class="label">Connected Guilds</p>
+                <p id="connectedGuilds" class="value">--</p>
             </article>
-            <article class="metric-card panel">
-                <p class="metric-label">Peak Key Level</p>
-                <p id="metricMaxKey" class="metric-value">--</p>
+            <article class="panel metric">
+                <p class="label">Configured Guilds</p>
+                <p id="configuredGuilds" class="value">--</p>
             </article>
         </section>
 
-        <section class="panel admin-actions-panel" aria-label="Dashboard admin actions">
-            <header class="panel-header">
-                <h2>Admin Actions</h2>
-                <span class="pill">Testing Tools</span>
+        <section class="panel">
+            <header class="section-header">
+                <h2>Guild Configuration</h2>
+                <span class="pill">SQLite</span>
             </header>
-            <div class="panel-content admin-actions-content">
-                <div class="admin-actions-grid">
-                    <article class="admin-card">
-                        <h3>Queue Controls</h3>
-                        <p class="admin-card-help">Apply to selected guild, or all guilds if no guild is selected.</p>
-                        <button id="clearQueueBtn" type="button" class="danger-button">Remove everyone from queue</button>
-                        <button id="devCleanupBtn" type="button" class="secondary-button">Dev cleanup (remove fake players)</button>
-                        <button id="clearHistoryBtn" type="button" class="danger-button">Clear leaderboard + key history</button>
-                        <button id="clearLogsBtn" type="button" class="danger-button">Clear runtime logs</button>
-                        <button id="downloadLogsBtn" type="button" class="secondary-button">Download runtime logs</button>
-                    </article>
-
-                    <article class="admin-card">
-                        <h3>Add Fake Player</h3>
-                        <p class="admin-card-help">Requires a specific guild selected in the top filter.</p>
-                        <form id="addFakePlayerForm" class="admin-form">
-                            <label>
-                                <span>Name</span>
-                                <input id="fakePlayerName" name="name" type="text" placeholder="Alice" maxlength="64" required>
-                            </label>
-                            <label>
-                                <span>Role</span>
-                                <select id="fakePlayerRole" name="role" required>
-                                    <option value="tank">Tank</option>
-                                    <option value="healer">Healer</option>
-                                    <option value="dps" selected>DPS</option>
-                                </select>
-                            </label>
-                            <div class="range-grid">
-                                <label>
-                                    <span>Min key</span>
-                                    <input id="fakePlayerMinKey" name="key_min" type="number" min="0" max="20" value="8" required>
-                                </label>
-                                <label>
-                                    <span>Max key</span>
-                                    <input id="fakePlayerMaxKey" name="key_max" type="number" min="0" max="20" value="12" required>
-                                </label>
-                            </div>
-                            <div class="triple-grid">
-                                <label>
-                                    <span>Has keystone</span>
-                                    <select id="fakePlayerHasKeystone" name="has_keystone">
-                                        <option value="false" selected>No</option>
-                                        <option value="true">Yes</option>
-                                    </select>
-                                </label>
-                                <label>
-                                    <span>Keystone level</span>
-                                    <input id="fakePlayerKeystoneLevel" name="keystone_level" type="number" min="2" max="20" value="10">
-                                </label>
-                                <label>
-                                    <span>Force match on add</span>
-                                    <select id="fakePlayerForceMatch" name="force_match">
-                                        <option value="true" selected>Yes</option>
-                                        <option value="false">No</option>
-                                    </select>
-                                </label>
-                            </div>
-                            <button type="submit" class="primary-button">Add fake player</button>
-                        </form>
-                    </article>
-
-                    <article class="admin-card">
-                        <h3>Add Fake Group</h3>
-                        <p class="admin-card-help">Requires a specific guild selected in the top filter.</p>
-                        <form id="addFakeGroupForm" class="admin-form">
-                            <label>
-                                <span>Leader name</span>
-                                <input id="fakeGroupLeader" name="leader_name" type="text" placeholder="GroupLead" maxlength="64" required>
-                            </label>
-                            <div class="triple-grid">
-                                <label>
-                                    <span>Tanks</span>
-                                    <input id="fakeGroupTanks" name="tanks" type="number" min="0" max="1" value="1" required>
-                                </label>
-                                <label>
-                                    <span>Healers</span>
-                                    <input id="fakeGroupHealers" name="healers" type="number" min="0" max="1" value="1" required>
-                                </label>
-                                <label>
-                                    <span>DPS</span>
-                                    <input id="fakeGroupDps" name="dps" type="number" min="0" max="3" value="2" required>
-                                </label>
-                            </div>
-                            <div class="range-grid">
-                                <label>
-                                    <span>Min key</span>
-                                    <input id="fakeGroupMinKey" name="key_min" type="number" min="0" max="20" value="8" required>
-                                </label>
-                                <label>
-                                    <span>Max key</span>
-                                    <input id="fakeGroupMaxKey" name="key_max" type="number" min="0" max="20" value="12" required>
-                                </label>
-                            </div>
-                            <button type="submit" class="primary-button">Add fake group</button>
-                        </form>
-                    </article>
-                </div>
-                <p id="adminActionStatus" class="admin-status" aria-live="polite"></p>
-            </div>
+            <div id="guildList" class="content state">Loading guilds...</div>
         </section>
 
-        <main class="dashboard-grid">
-            <section class="panel dashboard-panel">
-                <header class="panel-header">
-                    <h2>Queue Status</h2>
-                    <span id="queueTotal" class="pill pill-neutral">--</span>
-                </header>
-                <div id="queueContent" class="panel-content">
-                    <p class="state-message">Loading queue data...</p>
-                </div>
-            </section>
-
-            <section class="panel dashboard-panel">
-                <header class="panel-header">
-                    <h2>Active Groups</h2>
-                    <span id="groupsTotal" class="pill">--</span>
-                </header>
-                <div id="groupsContent" class="panel-content">
-                    <p class="state-message">Loading active matches...</p>
-                </div>
-            </section>
-
-            <section class="panel dashboard-panel">
-                <header class="panel-header">
-                    <h2>Weekly Leaderboard</h2>
-                    <span id="leaderboardTotal" class="pill pill-neutral">--</span>
-                </header>
-                <div id="leaderboardContent" class="panel-content">
-                    <p class="state-message">Loading leaderboard...</p>
-                </div>
-            </section>
-
-            <section class="panel dashboard-panel">
-                <header class="panel-header">
-                    <h2>Completed Keys</h2>
-                    <span class="pill pill-neutral">Weekly</span>
-                </header>
-                <div id="completedContent" class="panel-content">
-                    <p class="state-message">Loading completion stats...</p>
-                </div>
-            </section>
-        </main>
-    </div>
+        <section class="panel">
+            <header class="section-header">
+                <h2>Runtime Logs</h2>
+                <span class="pill">events.jsonl</span>
+            </header>
+            <div class="log-actions">
+                <button id="downloadLogsBtn" type="button">Download logs</button>
+                <button id="clearLogsBtn" type="button" class="danger">Clear logs</button>
+            </div>
+            <p id="adminStatus" class="status" aria-live="polite"></p>
+        </section>
+    </main>
     <script src="__DASHBOARD_JS_URL__" defer></script>
 </body>
 </html>
-

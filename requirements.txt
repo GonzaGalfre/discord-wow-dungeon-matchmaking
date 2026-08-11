@@ -8,3 +8,9 @@ python-dotenv>=1.0.0
 fastapi>=0.110.0
 uvicorn[standard]>=0.29.0
 
+# Bot-generated roster confirmation images
+Pillow>=10.0.0
+
+# Test suite
+pytest>=8.0.0
+

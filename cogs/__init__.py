@@ -1,18 +1,7 @@
-"""
-Cogs module for the WoW Mythic+ LFG Bot.
+"""Discord slash command cogs for WipyBot."""
 
-This module contains Discord slash commands organized as Cogs.
-"""
-
-from cogs.lfg import LFGCog
-from cogs.stats import StatsCog
-from cogs.dev import DevCog
 from cogs.voice import VoiceCog
+from cogs.raid import RaidCog
+from cogs.participation import ParticipationCog
 
-__all__ = [
-    "LFGCog",
-    "StatsCog",
-    "DevCog",
-    "VoiceCog",
-]
-
+__all__ = ["VoiceCog", "RaidCog", "ParticipationCog"]

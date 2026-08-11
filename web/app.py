@@ -12,8 +12,8 @@ from web.routes.auth import require_dashboard_auth
 from web.routes.dashboard import router as dashboard_router
 
 app = FastAPI(
-    title="WoW Mythic+ LFG Dashboard",
-    description="Admin dashboard for queues, groups, leaderboard, and testing actions.",
+    title="WipyBot Dashboard",
+    description="Admin dashboard for WipyBot infrastructure.",
     version="1.0.0",
 )
 
@@ -74,4 +74,3 @@ def dashboard_index(request: Request) -> str:
     html = html.replace("__DASHBOARD_CSS_URL__", css_url)
     html = html.replace("__DASHBOARD_JS_URL__", js_url)
     return html
-

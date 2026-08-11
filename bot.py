@@ -1,126 +1,115 @@
-"""
-Bot class for the WoW Mythic+ LFG Bot.
-
-This module contains the LFGBot class which extends commands.Bot.
-
-Multi-guild support: The bot can work with multiple Discord servers simultaneously.
-Each guild has its own queue and channel configuration.
-"""
-
-import asyncio
+"""Discord bot class for WipyBot."""
 
 import discord
 from discord.ext import commands
 
-from views.join_queue import JoinQueueView
+from config.settings import HUB_API_BASE_URL
+from services.hub_sync import hub_sync_loop
 from views.move_panel import MovePanelView
+from views.participation_panel import ParticipationPanelView
+from views.raid_signup import RaidSignupView
+from views.vip_voice import VipVoiceDecisionView, VipVoicePanelView
 from models.guild_settings import get_all_configured_guilds
-from services.queue_presence import queue_presence_watchdog
+from models.participation import list_published_raffle_periods
+from views.raffle_details import RaffleDetailsView
 
 
-class LFGBot(commands.Bot):
-    """
-    Custom Bot class for the LFG system.
-    
-    Inherits from commands.Bot to override setup_hook(),
-    which is the best place to register persistent views.
-    
-    Supports multiple guilds with independent queues and configurations.
-    """
+class WipyBot(commands.Bot):
+    """Custom Discord bot class for WipyBot."""
     
     def __init__(self):
         intents = discord.Intents.default()
+        intents.members = True
         intents.voice_states = True
+        intents.messages = True
         
         super().__init__(
             command_prefix="!",
             intents=intents,
         )
-        self._queue_presence_task: asyncio.Task | None = None
+        self._guild_commands_synced = False
+        self._hub_sync_task = None
     
     async def setup_hook(self):
-        """
-        Called before the bot connects to Discord.
-        
-        Here we:
-        1. Register persistent views so they work after restarts
-        2. Load the LFG cog with slash commands
-        3. Sync the command tree
-        
-        Note: PartyCompleteView is not registered here because it needs
-        the match user IDs, which are lost on restart.
-        This is acceptable since the queue is also in memory.
-        """
-        # Register persistent views
-        self.add_view(JoinQueueView())
+        """Register persistent infrastructure views and slash commands."""
         self.add_view(MovePanelView())
-        if self._queue_presence_task is None:
-            self._queue_presence_task = asyncio.create_task(queue_presence_watchdog(self))
-        
-        # Load cogs
-        try:
-            await self.load_extension("cogs.lfg")
-            print("✓ LFG cog cargado")
-        except Exception as e:
-            print(f"✗ Error cargando LFG cog: {e}")
-        
-        try:
-            await self.load_extension("cogs.stats")
-            print("✓ Stats cog cargado")
-        except Exception as e:
-            print(f"✗ Error cargando Stats cog: {e}")
+        self.add_view(RaidSignupView())
+        self.add_view(ParticipationPanelView())
+        self.add_view(VipVoicePanelView())
+        self.add_view(VipVoiceDecisionView())
+        for period in list_published_raffle_periods():
+            self.add_view(RaffleDetailsView(period.id))
+        if HUB_API_BASE_URL:
+            self._hub_sync_task = self.loop.create_task(hub_sync_loop(self))
+            print(f"Hub sync habilitado: {HUB_API_BASE_URL}")
         
         try:
-            await self.load_extension("cogs.dev")
-            print("✓ Dev cog cargado")
+            await self.load_extension("cogs.raid")
+            print("Raid cog cargado")
         except Exception as e:
-            print(f"✗ Error cargando Dev cog: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"Error cargando Raid cog: {e}")
         
         try:
             await self.load_extension("cogs.voice")
-            print("✓ Voice cog cargado")
+            print("Voice cog cargado")
         except Exception as e:
-            print(f"✗ Error cargando Voice cog: {e}")
-        
-        # Sync slash commands globally
+            print(f"Error cargando Voice cog: {e}")
+
+        try:
+            await self.load_extension("cogs.participation")
+            print("Participation cog cargado")
+        except Exception as e:
+            print(f"Error cargando Participation cog: {e}")
+
+        try:
+            await self.load_extension("cogs.vip_voice")
+            print("VIP voice cog cargado")
+        except Exception as e:
+            print(f"Error cargando VIP voice cog: {e}")
+
+        commands_to_restore = list(self.tree.get_commands())
+        self.tree.clear_commands(guild=None)
         await self.tree.sync()
-        print("✅ Comandos sincronizados globalmente")
+        for command in commands_to_restore:
+            self.tree.add_command(command)
+        print("Comandos globales remotos limpiados; se usaran comandos por servidor")
     
     async def on_ready(self):
-        """
-        Called when the bot has connected to Discord.
-        """
-        print(f"🤖 Conectado como {self.user} (ID: {self.user.id})")
-        print(f"📡 Conectado a {len(self.guilds)} servidor(es):")
+        """Called when the bot has connected to Discord."""
+        if not self._guild_commands_synced:
+            self._guild_commands_synced = True
+            for guild in self.guilds:
+                guild_object = discord.Object(id=guild.id)
+                self.tree.clear_commands(guild=guild_object)
+                self.tree.copy_global_to(guild=guild_object)
+                await self.tree.sync(guild=guild_object)
+                print(f"Comandos sincronizados en guild: {guild.name} ({guild.id})")
+
+        print(f"Conectado como {self.user} (ID: {self.user.id})")
+        print(f"Conectado a {len(self.guilds)} servidor(es):")
         
-        # List all connected guilds
         for guild in self.guilds:
-            print(f"   • {guild.name} (ID: {guild.id})")
+            print(f"   - {guild.name} (ID: {guild.id})")
         
         print("─" * 40)
-        print("💡 Comandos disponibles globalmente (pueden tardar 1 minuto en aparecer)")
-        print("   Si necesitas comandos inmediatos, usa: /dev_sync")
+        print("Comandos sincronizados en los servidores conectados")
         print("─" * 40)
         
-        # Show configured guilds
         configured_guilds = get_all_configured_guilds()
         if configured_guilds:
-            print(f"⚙️ {len(configured_guilds)} servidor(es) configurado(s):")
+            print(f"{len(configured_guilds)} servidor(es) configurado(s):")
             for guild_data in configured_guilds:
                 guild_name = guild_data.get("guild_name", "Unknown")
-                has_match = "✓" if guild_data.get("match_channel_id") else "✗"
-                has_announce = "✓" if guild_data.get("announcement_channel_id") else "✗"
-                print(f"   • {guild_name} [match: {has_match}] [anuncios: {has_announce}]")
+                has_signup = "yes" if guild_data.get("signup_channel_id") else "no"
+                print(f"   - {guild_name} [signup: {has_signup}]")
         else:
-            print("⚠️ Ningún servidor configurado. Usa /setup en cada servidor.")
+            print("Ningun servidor configurado todavia.")
         
         print("─" * 40)
         
         await self.change_presence(
             activity=discord.Activity(
                 type=discord.ActivityType.watching,
-                name="grupos de M+ 🗝️",
+                name="raid signups",
             )
         )

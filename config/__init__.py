@@ -1,32 +1,25 @@
-"""
-Configuration module for the WoW Mythic+ LFG Bot.
-
-This module contains all configuration constants and environment variables.
-
-Note: Channel IDs are now stored per-guild in the database.
-Use models.guild_settings to get/set guild-specific channels.
-"""
+"""Configuration package for WipyBot."""
 
 from config.settings import (
-    # Environment variables
-    DISCORD_TOKEN,
-    DASHBOARD_PASSWORD,
     DASHBOARD_HOST,
+    DASHBOARD_PASSWORD,
     DASHBOARD_PORT,
-    # Constants
-    ROLES,
-    MIN_KEY_LEVEL,
-    MAX_KEY_LEVEL,
-    PARTY_COMPOSITION,
+    DISCORD_TOKEN,
+    HUB_API_BASE_URL,
+    HUB_API_SECRET,
+    HUB_SYNC_INTERVAL_SECONDS,
+    VOICE_MOVE_BATCH_DELAY_SECONDS,
+    VOICE_MOVE_BATCH_SIZE,
 )
 
 __all__ = [
-    "DISCORD_TOKEN",
-    "DASHBOARD_PASSWORD",
     "DASHBOARD_HOST",
+    "DASHBOARD_PASSWORD",
     "DASHBOARD_PORT",
-    "ROLES",
-    "MIN_KEY_LEVEL",
-    "MAX_KEY_LEVEL",
-    "PARTY_COMPOSITION",
+    "DISCORD_TOKEN",
+    "HUB_API_BASE_URL",
+    "HUB_API_SECRET",
+    "HUB_SYNC_INTERVAL_SECONDS",
+    "VOICE_MOVE_BATCH_DELAY_SECONDS",
+    "VOICE_MOVE_BATCH_SIZE",
 ]

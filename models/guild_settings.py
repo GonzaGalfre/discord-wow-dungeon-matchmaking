@@ -1,9 +1,4 @@
-"""
-Guild settings model for the WoW Mythic+ LFG Bot.
-
-This module handles per-guild configuration storage.
-Each guild can have its own LFG, match, and announcement channels.
-"""
+"""Per-guild settings storage for WipyBot."""
 
 from typing import Dict, Optional
 
@@ -11,61 +6,61 @@ from models.database import get_connection
 
 
 def _ensure_guild_settings_table() -> None:
-    """
-    Ensure the guild_settings table exists.
-    
-    Called automatically when needed.
-    """
+    """Ensure the guild_settings table and current columns exist."""
     conn = get_connection()
     cursor = conn.cursor()
-    
-    cursor.execute("""
+
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS guild_settings (
             guild_id INTEGER PRIMARY KEY,
             guild_name TEXT NOT NULL,
-            lfg_channel_id INTEGER,
-            lfg_message_id INTEGER,
-            match_channel_id INTEGER,
-            announcement_channel_id INTEGER,
+            signup_channel_id INTEGER,
+            signup_message_id INTEGER,
+            admin_channel_id INTEGER,
+            move_panel_channel_id INTEGER,
+            move_panel_message_id INTEGER,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    """)
+        """
+    )
 
-    # Lightweight migration for existing databases.
     cursor.execute("PRAGMA table_info(guild_settings)")
     columns = {row[1] for row in cursor.fetchall()}
-    if "lfg_message_id" not in columns:
-        cursor.execute("ALTER TABLE guild_settings ADD COLUMN lfg_message_id INTEGER")
-    if "move_panel_channel_id" not in columns:
-        cursor.execute("ALTER TABLE guild_settings ADD COLUMN move_panel_channel_id INTEGER")
-    if "move_panel_message_id" not in columns:
-        cursor.execute("ALTER TABLE guild_settings ADD COLUMN move_panel_message_id INTEGER")
+    for column in (
+        "signup_channel_id",
+        "signup_message_id",
+        "admin_channel_id",
+        "move_panel_channel_id",
+        "move_panel_message_id",
+    ):
+        if column not in columns:
+            cursor.execute(f"ALTER TABLE guild_settings ADD COLUMN {column} INTEGER")
 
     conn.commit()
 
 
 def get_guild_settings(guild_id: int) -> Optional[Dict]:
-    """
-    Get the settings for a specific guild.
-    
-    Args:
-        guild_id: Discord guild ID
-        
-    Returns:
-        Dict with guild settings, or None if not configured
-    """
+    """Get settings for a Discord guild."""
     _ensure_guild_settings_table()
-    
     conn = get_connection()
     cursor = conn.cursor()
-    
-    cursor.execute("""
-        SELECT guild_id, guild_name, lfg_channel_id, lfg_message_id, match_channel_id, announcement_channel_id
+
+    cursor.execute(
+        """
+        SELECT guild_id,
+               guild_name,
+               signup_channel_id,
+               signup_message_id,
+               admin_channel_id,
+               move_panel_channel_id,
+               move_panel_message_id
         FROM guild_settings
         WHERE guild_id = ?
-    """, (guild_id,))
-    
+        """,
+        (guild_id,),
+    )
     row = cursor.fetchone()
     return dict(row) if row else None
 
@@ -73,190 +68,119 @@ def get_guild_settings(guild_id: int) -> Optional[Dict]:
 def save_guild_settings(
     guild_id: int,
     guild_name: str,
-    lfg_channel_id: Optional[int] = None,
-    lfg_message_id: Optional[int] = None,
-    match_channel_id: Optional[int] = None,
-    announcement_channel_id: Optional[int] = None
+    signup_channel_id: Optional[int] = None,
+    signup_message_id: Optional[int] = None,
+    admin_channel_id: Optional[int] = None,
 ) -> None:
-    """
-    Save or update guild settings.
-    
-    Args:
-        guild_id: Discord guild ID
-        guild_name: Guild name for reference
-        lfg_channel_id: Channel where the LFG button is posted
-        lfg_message_id: Message ID of the persistent LFG setup message
-        match_channel_id: Channel where match notifications are posted
-        announcement_channel_id: Channel for weekly announcements
-    """
+    """Create or update neutral guild settings."""
     _ensure_guild_settings_table()
-    
     conn = get_connection()
     cursor = conn.cursor()
-    
-    # Check if guild exists
-    cursor.execute("SELECT guild_id FROM guild_settings WHERE guild_id = ?", (guild_id,))
-    exists = cursor.fetchone() is not None
-    
-    if exists:
-        # Update existing
-        cursor.execute("""
-            UPDATE guild_settings
-            SET guild_name = ?,
-                lfg_channel_id = COALESCE(?, lfg_channel_id),
-                lfg_message_id = COALESCE(?, lfg_message_id),
-                match_channel_id = COALESCE(?, match_channel_id),
-                announcement_channel_id = COALESCE(?, announcement_channel_id),
-                updated_at = CURRENT_TIMESTAMP
-            WHERE guild_id = ?
-        """, (guild_name, lfg_channel_id, lfg_message_id, match_channel_id, announcement_channel_id, guild_id))
-    else:
-        # Insert new
-        cursor.execute("""
-            INSERT INTO guild_settings (guild_id, guild_name, lfg_channel_id, lfg_message_id, match_channel_id, announcement_channel_id)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (guild_id, guild_name, lfg_channel_id, lfg_message_id, match_channel_id, announcement_channel_id))
-    
+
+    cursor.execute(
+        """
+        INSERT INTO guild_settings (
+            guild_id,
+            guild_name,
+            signup_channel_id,
+            signup_message_id,
+            admin_channel_id
+        )
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(guild_id) DO UPDATE SET
+            guild_name = excluded.guild_name,
+            signup_channel_id = COALESCE(excluded.signup_channel_id, guild_settings.signup_channel_id),
+            signup_message_id = COALESCE(excluded.signup_message_id, guild_settings.signup_message_id),
+            admin_channel_id = COALESCE(excluded.admin_channel_id, guild_settings.admin_channel_id),
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (guild_id, guild_name, signup_channel_id, signup_message_id, admin_channel_id),
+    )
     conn.commit()
 
 
-def update_guild_channel(
-    guild_id: int,
-    channel_type: str,
-    channel_id: int
-) -> bool:
-    """
-    Update a specific channel for a guild.
-    
-    Args:
-        guild_id: Discord guild ID
-        channel_type: One of 'lfg', 'match', 'announcement'
-        channel_id: The new channel ID
-        
-    Returns:
-        True if updated, False if guild not found
-    """
+def update_guild_channel(guild_id: int, channel_type: str, channel_id: int) -> bool:
+    """Update a configured channel for a guild."""
     _ensure_guild_settings_table()
-    
     column_map = {
-        'lfg': 'lfg_channel_id',
-        'match': 'match_channel_id',
-        'announcement': 'announcement_channel_id',
+        "signup": "signup_channel_id",
+        "admin": "admin_channel_id",
     }
-    
     column = column_map.get(channel_type)
     if not column:
         raise ValueError(f"Invalid channel_type: {channel_type}")
-    
+
     conn = get_connection()
     cursor = conn.cursor()
-    
-    cursor.execute(f"""
+    cursor.execute(
+        f"""
         UPDATE guild_settings
         SET {column} = ?, updated_at = CURRENT_TIMESTAMP
         WHERE guild_id = ?
-    """, (channel_id, guild_id))
-    
+        """,
+        (channel_id, guild_id),
+    )
     conn.commit()
     return cursor.rowcount > 0
 
 
 def get_all_configured_guilds() -> list:
-    """
-    Get all guilds that have been configured.
-    
-    Returns:
-        List of guild settings dicts
-    """
+    """Return all configured guild settings."""
     _ensure_guild_settings_table()
-    
     conn = get_connection()
     cursor = conn.cursor()
-    
-    cursor.execute("""
-        SELECT guild_id, guild_name, lfg_channel_id, lfg_message_id, match_channel_id, announcement_channel_id
+
+    cursor.execute(
+        """
+        SELECT guild_id,
+               guild_name,
+               signup_channel_id,
+               signup_message_id,
+               admin_channel_id,
+               move_panel_channel_id,
+               move_panel_message_id
         FROM guild_settings
-    """)
-    
+        ORDER BY guild_name COLLATE NOCASE
+        """
+    )
     return [dict(row) for row in cursor.fetchall()]
 
 
-def get_match_channel_id(guild_id: int) -> Optional[int]:
-    """
-    Get the match channel ID for a guild.
-    
-    Args:
-        guild_id: Discord guild ID
-        
-    Returns:
-        Match channel ID, or None if not configured
-    """
-    settings = get_guild_settings(guild_id)
-    if settings:
-        return settings.get("match_channel_id")
-    return None
-
-
-def get_announcement_channel_id(guild_id: int) -> Optional[int]:
-    """
-    Get the announcement channel ID for a guild.
-    
-    Args:
-        guild_id: Discord guild ID
-        
-    Returns:
-        Announcement channel ID, or None if not configured
-    """
-    settings = get_guild_settings(guild_id)
-    if settings:
-        return settings.get("announcement_channel_id")
-    return None
-
-
-def get_lfg_message_id(guild_id: int) -> Optional[int]:
-    """
-    Get the LFG setup message ID for a guild.
-
-    Args:
-        guild_id: Discord guild ID
-
-    Returns:
-        LFG setup message ID, or None if not configured
-    """
-    settings = get_guild_settings(guild_id)
-    if settings:
-        return settings.get("lfg_message_id")
-    return None
+def update_signup_message_id(guild_id: int, message_id: int) -> bool:
+    """Store the active raid signup message ID for a guild."""
+    _ensure_guild_settings_table()
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        UPDATE guild_settings
+        SET signup_message_id = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE guild_id = ?
+        """,
+        (message_id, guild_id),
+    )
+    conn.commit()
+    return cursor.rowcount > 0
 
 
 def get_move_panel_ids(guild_id: int) -> Optional[tuple]:
-    """
-    Get the move panel channel and message IDs for a guild.
-
-    Returns:
-        (channel_id, message_id) tuple, or None if not configured
-    """
+    """Return saved move panel channel/message IDs for a guild."""
     settings = get_guild_settings(guild_id)
-    if settings:
-        ch = settings.get("move_panel_channel_id")
-        msg = settings.get("move_panel_message_id")
-        if ch and msg:
-            return (ch, msg)
+    if not settings:
+        return None
+
+    channel_id = settings.get("move_panel_channel_id")
+    message_id = settings.get("move_panel_message_id")
+    if channel_id and message_id:
+        return (channel_id, message_id)
     return None
 
 
 def update_move_panel_ids(guild_id: int, channel_id: int, message_id: int) -> bool:
-    """
-    Save or update the move panel channel and message IDs for a guild.
-
-    Returns:
-        True if updated, False if guild not found
-    """
+    """Save or update the move panel channel/message IDs for a guild."""
     _ensure_guild_settings_table()
-
     conn = get_connection()
     cursor = conn.cursor()
-
     cursor.execute(
         """
         UPDATE guild_settings
@@ -265,38 +189,5 @@ def update_move_panel_ids(guild_id: int, channel_id: int, message_id: int) -> bo
         """,
         (channel_id, message_id, guild_id),
     )
-
     conn.commit()
     return cursor.rowcount > 0
-
-
-def update_lfg_message_id(guild_id: int, message_id: int) -> bool:
-    """
-    Update the LFG setup message ID for a guild.
-
-    Args:
-        guild_id: Discord guild ID
-        message_id: Message ID of the persistent LFG setup message
-
-    Returns:
-        True if updated, False if guild not found
-    """
-    _ensure_guild_settings_table()
-
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute(
-        """
-        UPDATE guild_settings
-        SET lfg_message_id = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE guild_id = ?
-        """,
-        (message_id, guild_id),
-    )
-
-    conn.commit()
-    return cursor.rowcount > 0
-
-
-

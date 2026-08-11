@@ -1,5 +1,5 @@
 """
-Voice Cog for the WoW Mythic+ LFG Bot.
+Voice cog for WipyBot.
 
 Provides voice channel management commands.
 Business logic lives in services/voice_move.py so the move panel UI
@@ -11,7 +11,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from services.voice_move import move_all_members, build_move_embed, build_error_embed
-from models.guild_settings import get_move_panel_ids, update_move_panel_ids
+from models.guild_settings import get_move_panel_ids, save_guild_settings, update_move_panel_ids
 
 MoveChannel = discord.VoiceChannel | discord.StageChannel
 
@@ -110,6 +110,7 @@ class VoiceCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
 
         guild_id = interaction.guild.id
+        save_guild_settings(guild_id, interaction.guild.name)
 
         # Delete the previous panel message for this guild if it still exists
         existing = get_move_panel_ids(guild_id)
