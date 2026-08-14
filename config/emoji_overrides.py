@@ -17,6 +17,7 @@ SPEC_EMOJIS: dict[str, str] = {
     "dk:unholy": "unholy",
     "dh:havoc": "havoc",
     "dh:vengeance": "vengeance",
+    "dh:devourer": "devourer",
     "warrior:arms": "arms",
     "warrior:fury": "fury",
     "warrior:protection": "protwar",

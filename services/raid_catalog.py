@@ -41,6 +41,7 @@ CLASSES = {
         "specs": {
             "havoc": {"name": "Havoc", "role": ROLE_MELEE},
             "vengeance": {"name": "Vengeance", "role": ROLE_TANK},
+            "devourer": {"name": "Devourer", "role": ROLE_RANGED},
         },
     },
     "warrior": {
