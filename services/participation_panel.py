@@ -50,11 +50,28 @@ def user_progress_text(settings, user_id: int) -> str:
     )
 
 
-def leaderboard_text(settings, limit: int = 20) -> str:
+def leaderboard_text(settings) -> str:
     period, totals = current_totals(settings)
-    ordered = sorted(totals, key=lambda item: (-item.total_tickets, -item.voice_seconds, -item.message_count, item.user_id))[:limit]
+    ordered = sorted(
+        (item for item in totals if item.total_tickets > 0),
+        key=lambda item: (-item.total_tickets, -item.voice_seconds, -item.message_count, item.user_id),
+    )
     body = "\n".join(participation_line(total) for total in ordered) or "No participation yet."
     return f"Period: {format_period(period.starts_at, period.ends_at)}\n{body}"
+
+
+def message_chunks(text: str, limit: int = 2000) -> list[str]:
+    """Split line-based content without losing entries to Discord's message limit."""
+    chunks: list[str] = []
+    current = ""
+    for line in text.splitlines():
+        if current and len(current) + len(line) + 1 > limit:
+            chunks.append(current)
+            current = ""
+        current = f"{current}\n{line}" if current else line
+    if current:
+        chunks.append(current)
+    return chunks or ["No participation yet."]
 
 
 def rules_text(settings) -> str:
@@ -72,12 +89,14 @@ def rules_text(settings) -> str:
 
 def build_panel_embed(settings) -> discord.Embed:
     period, totals = current_totals(settings)
-    ordered = sorted(totals, key=lambda item: (-item.total_tickets, -item.voice_seconds, -item.message_count, item.user_id))[:10]
-    lines = []
-    for index, total in enumerate(ordered, start=1):
-        lines.append(f"{index}. <@{total.user_id}> - {total.total_tickets} tickets ({format_duration(total.voice_seconds)})")
-    if not lines:
-        lines.append("No participation yet.")
+    ordered = sorted(
+        (item for item in totals if item.total_tickets > 0),
+        key=lambda item: (-item.total_tickets, -item.voice_seconds, -item.message_count, item.user_id),
+    )
+    lines = [
+        f"{index}. <@{total.user_id}> - {total.total_tickets} tickets ({format_duration(total.voice_seconds)})"
+        for index, total in enumerate(ordered, start=1)
+    ]
 
 
     embed = discord.Embed(
@@ -85,7 +104,18 @@ def build_panel_embed(settings) -> discord.Embed:
         description=f"Current period: {format_period(period.starts_at, period.ends_at)}",
         color=0x55EFC4,
     )
-    embed.add_field(name="Top Participants", value="\n".join(lines), inline=False)
+    if not lines:
+        embed.add_field(name="Participation", value="No ticket holders yet.", inline=False)
+    else:
+        line_offset = 0
+        for chunk in message_chunks("\n".join(lines), limit=1024):
+            count = len(chunk.splitlines())
+            embed.add_field(
+                name=f"Participation ({line_offset + 1}-{line_offset + count})",
+                value=chunk,
+                inline=False,
+            )
+            line_offset += count
     embed.add_field(name="Raffle", value="Manual draw by officers", inline=True)
     embed.add_field(name="Panel refresh", value=f"Every {settings.panel_update_minutes} min", inline=True)
     embed.set_footer(text="Use the buttons below for personal progress, rules, and a detailed leaderboard.")

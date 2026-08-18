@@ -16,8 +16,8 @@ from services.participation import (
     format_period,
     participation_line,
 )
-from services.participation_panel import build_panel_embed, leaderboard_text, user_progress_text
-from services.raffle import RaffleError, draw_raffle
+from services.participation_panel import build_panel_embed, leaderboard_text, message_chunks, user_progress_text
+from services.raffle import RaffleError, draw_raffle, winner_ticket_numbers
 from views.participation_panel import ParticipationPanelView
 from views.raffle_details import RaffleDetailsView
 
@@ -313,7 +313,8 @@ class ParticipationCog(commands.Cog):
             await interaction.response.send_message("Participation is not configured for this server.", ephemeral=True)
             return
         await interaction.response.defer()
-        await interaction.followup.send(leaderboard_text(settings))
+        for chunk in message_chunks(leaderboard_text(settings)):
+            await interaction.followup.send(chunk)
 
     @participation.command(name="voice_status", description="Show open voice participation sessions.")
     async def voice_status(self, interaction: discord.Interaction) -> None:
@@ -399,7 +400,9 @@ class ParticipationCog(commands.Cog):
                 try:
                     message = await channel.send(
                         f"Raffle winner: <@{result.winner_user_id}>\n"
-                        f"Tickets: {result.total_tickets} | Winning number: {result.winning_number}",
+                        f"Winning number: {result.winning_number}\n"
+                        f"Winner's ticket numbers: {winner_ticket_numbers(result.period_id)}\n"
+                        f"Total tickets: {result.total_tickets}",
                         view=RaffleDetailsView(result.period_id),
                     )
                     participation_repo.mark_raffle_published(result.period_id, channel.id, message.id)

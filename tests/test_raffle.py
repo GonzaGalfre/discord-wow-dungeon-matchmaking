@@ -5,7 +5,7 @@ import asyncio
 
 from models import participation as repo
 from services.participation import ParticipationCalculator, ParticipationRules
-from services.raffle import RaffleError, draw_raffle
+from services.raffle import RaffleError, draw_raffle, winner_ticket_numbers
 from services.hub_sync import apply_hub_snapshot
 from views.raffle_details import RaffleDetailsView
 
@@ -35,6 +35,8 @@ def test_manual_draw_excludes_winner_and_opens_next_period() -> None:
     assert drawn.winner_user_id == 5
     assert repo.list_exclusive_winner_ids(123) == [5]
     assert repo.get_current_open_period(123).id != period.id
+    assert repo.get_raffle_winner_ticket_range(period.id) == (1, 2)
+    assert winner_ticket_numbers(period.id) == "1, 2"
 
 
 def test_zero_ticket_users_are_rejected() -> None:

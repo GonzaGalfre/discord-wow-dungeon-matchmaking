@@ -51,3 +51,13 @@ def draw_raffle(guild_id: int, now: datetime, calculator: ParticipationCalculato
     except ValueError as exc:
         raise RaffleError(str(exc)) from exc
     return DrawResult(**{key: result[key] for key in DrawResult.__dataclass_fields__})
+
+
+def winner_ticket_numbers(period_id: int) -> str:
+    ticket_range = participation_repo.get_raffle_winner_ticket_range(period_id)
+    if ticket_range is None:
+        return "unavailable"
+    start, end = ticket_range
+    numbers = ", ".join(str(number) for number in range(start, end + 1))
+    # Keep the announcement below Discord's message limit for unusually large ticket caps.
+    return numbers if len(numbers) <= 1500 else f"{start}-{end} ({end - start + 1} tickets)"

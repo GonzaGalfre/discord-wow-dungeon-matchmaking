@@ -5,7 +5,7 @@ from __future__ import annotations
 import discord
 
 from models import participation as participation_repo
-from services.participation_panel import leaderboard_text, rules_text, user_progress_text
+from services.participation_panel import leaderboard_text, message_chunks, rules_text, user_progress_text
 
 
 class ParticipationPanelView(discord.ui.View):
@@ -42,4 +42,7 @@ class ParticipationPanelView(discord.ui.View):
         if settings is None:
             await interaction.response.send_message("Participation is not configured for this server.", ephemeral=True)
             return
-        await interaction.response.send_message(leaderboard_text(settings), ephemeral=True)
+        chunks = message_chunks(leaderboard_text(settings))
+        await interaction.response.send_message(chunks[0], ephemeral=True)
+        for chunk in chunks[1:]:
+            await interaction.followup.send(chunk, ephemeral=True)

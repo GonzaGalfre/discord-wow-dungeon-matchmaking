@@ -42,6 +42,7 @@ from models.participation import (
 from models import vip_voice as vip_voice_repo
 from services.participation_panel import build_panel_embed
 from services.participation_panel import calculator_for_settings
+from services.raffle import winner_ticket_numbers
 from services.raid_signup import build_raid_signup_embed, refresh_raid_signup_message
 from services.roster_publish import publish_confirmed_roster
 
@@ -405,7 +406,9 @@ async def _publish_pending_raffle_draws(client: discord.Client) -> None:
             from views.raffle_details import RaffleDetailsView
             message = await channel.send(
                 f"Raffle winner: <@{period.winner_user_id}>\n"
-                f"Tickets: {period.total_tickets_at_draw} | Winning number: {period.winning_number}",
+                f"Winning number: {period.winning_number}\n"
+                f"Winner's ticket numbers: {winner_ticket_numbers(period.id)}\n"
+                f"Total tickets: {period.total_tickets_at_draw}",
                 view=RaffleDetailsView(period.id),
             )
         except (discord.NotFound, discord.Forbidden):

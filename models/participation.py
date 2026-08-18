@@ -955,6 +955,21 @@ def list_raffle_entry_snapshots(period_id: int) -> list[dict]:
     return [{"user_id": int(row["user_id"]), "total_tickets": int(row["total_tickets"])} for row in rows]
 
 
+def get_raffle_winner_ticket_range(period_id: int) -> tuple[int, int] | None:
+    row = get_connection().execute(
+        """
+        SELECT s.cumulative_ticket_start, s.cumulative_ticket_end
+        FROM raffle_entry_snapshots AS s
+        JOIN raffle_periods AS p ON p.id = s.raffle_period_id
+        WHERE s.raffle_period_id = ? AND s.user_id = p.winner_user_id
+        """,
+        (period_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return int(row["cumulative_ticket_start"]), int(row["cumulative_ticket_end"])
+
+
 def mark_raffle_published(period_id: int, channel_id: int, message_id: int) -> None:
     get_connection().execute("INSERT OR IGNORE INTO raffle_draw_publications (raffle_period_id, channel_id, message_id, published_at) VALUES (?, ?, ?, ?)", (period_id, channel_id, message_id, _to_db_time(utc_now())))
     get_connection().commit()
